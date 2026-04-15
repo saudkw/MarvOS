@@ -56,6 +56,8 @@ function normalizeOptions(ns, options, defaults) {
         normalized.buyScript = buyDefault;
     }
 
+    normalized.buyMode = normalized.buyMode === "aggressive" ? "aggressive" : "passive";
+
     return normalized;
 }
 

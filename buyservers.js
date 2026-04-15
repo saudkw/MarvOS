@@ -1,12 +1,13 @@
 /** @param {NS} ns */
 export async function main(ns) {
     const flags = ns.flags([
-        ["prefix", "pserv-"],
+        ["prefix", "MiniMarv-"],
         ["min-ram", 2],
         ["max-ram", 0],
-        ["reserve", 5_000_000],
-        ["budget-pct", 1],
-        ["interval", 10_000],
+        ["reserve", 250_000_000],
+        ["budget-pct", 0.25],
+        ["interval", 20_000],
+        ["max-ops", 1],
         ["once", false],
     ]);
 
@@ -25,6 +26,7 @@ export async function main(ns) {
             maxRam: normalizeMaxRam(ns, flags["max-ram"]),
             reserve: Math.max(0, Number(flags.reserve) || 0),
             budgetPct: clampBudget(flags["budget-pct"]),
+            maxOps: Math.max(1, Math.floor(Number(flags["max-ops"]) || 1)),
         });
 
         if (action.notify && action.message) ns.tprint(action.message);
@@ -41,7 +43,7 @@ function buyOrUpgrade(ns, config) {
 
     const changes = [];
     let guard = 0;
-    while (budget > 0 && guard < 100) {
+    while (budget > 0 && guard < config.maxOps) {
         guard += 1;
         const action = singleBuyOrUpgrade(ns, config, budget);
         if (!action) break;

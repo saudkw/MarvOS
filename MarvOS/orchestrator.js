@@ -24,6 +24,7 @@ const DEFAULT_OPTIONS = {
     selectedMode: "money",
     autoTor: true,
     autoTrade: false,
+    buyMode: "passive",
 };
 
 /** @param {NS} ns */
@@ -94,7 +95,7 @@ function maybeRunBuyScript(ns, options, activeMode) {
     const free = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
     if (free < needed + 4) return;
 
-    ns.exec(script, "home", 1);
+    ns.exec(script, "home", 1, ...buildBuyArgs(options));
 }
 
 function resolveMode(ns, options, progress) {
@@ -228,6 +229,16 @@ function buildRepArgs(options) {
     const args = ["--reserve", String(options.shareReserve)];
     if (options.shareHome) args.push("--home");
     if (options.sharePurchased) args.push("--purchased");
+    return args;
+}
+
+function buildBuyArgs(options) {
+    const args = ["--prefix", "MiniMarv-"];
+    if (options.buyMode === "aggressive") {
+        args.push("--budget-pct", "0.90", "--reserve", "50_000_000", "--interval", "12000", "--max-ops", "8");
+    } else {
+        args.push("--budget-pct", "0.25", "--reserve", "250_000_000", "--interval", "20000", "--max-ops", "1");
+    }
     return args;
 }
 

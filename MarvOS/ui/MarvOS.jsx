@@ -37,6 +37,7 @@ const DEFAULT_OPTIONS = {
     selectedMode: "money",
     autoTor: true,
     autoTrade: false,
+    buyMode: "passive",
 };
 
 const REFRESH_PORT = 20;
@@ -144,6 +145,7 @@ function renderOverview(ns, theme, progress, modeState) {
 }
 
 function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
+    const moneyRunning = isScriptRunning(ns, SCRIPTS.formulas);
     return (
         <div style={twoColumnGridStyle}>
             <div style={cardStyle(theme)}>
@@ -175,6 +177,7 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                     <button style={secondaryButtonStyle(theme)} onClick={() => setXpTarget(ns, options)}>XP Target</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setRootScript(ns, options)}>Root Script</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setBuyScript(ns, options)}>Buy Script</button>
+                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleBuyMode(ns, options)}>Buy Mode</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setReserve(ns, options, "shareReserve", "Share reserve on home")}>Share Reserve</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setReserve(ns, options, "homeReserve", "Home reserve for startup/xp")}>Home Reserve</button>
                 </div>
@@ -182,6 +185,7 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                     {renderStatTile(theme, "XP Target", options.xpTarget || "auto")}
                     {renderStatTile(theme, "Root Script", options.rootScript)}
                     {renderStatTile(theme, "Buy Script", options.buyScript || "unset")}
+                    {renderStatTile(theme, "Buy Mode", buyModeLabel(options.buyMode))}
                     {renderStatTile(theme, "Share Reserve", String(options.shareReserve))}
                     {renderStatTile(theme, "Home Reserve", String(options.homeReserve))}
                 </div>
@@ -205,7 +209,11 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                     fallbackText: modeState.reason,
                 })}
                 {renderStatusBlock(ns, theme, "Money Engine", statuses.formulas, {
-                    idleAction: modeState.currentMode === "money" || modeState.currentMode === "rep" ? "Not running" : "Idle",
+                    idleAction: moneyRunning
+                        ? "Running (waiting for status)"
+                        : modeState.currentMode === "money" || modeState.currentMode === "rep"
+                            ? "Not running"
+                            : "Idle",
                     fallbackText: (modeState.currentMode === "money" || modeState.currentMode === "rep")
                         ? formatOrchestratorNotes(statuses.orchestrator?.notes)
                         : undefined,
@@ -586,6 +594,13 @@ function toggleOption(ns, options, key) {
     triggerRefresh(ns);
 }
 
+function toggleBuyMode(ns, options) {
+    options.buyMode = options.buyMode === "aggressive" ? "passive" : "aggressive";
+    saveOptions(ns, options);
+    notify(ns, `Buy mode -> ${buyModeLabel(options.buyMode)}`);
+    triggerRefresh(ns);
+}
+
 function normalizeScriptPath(script) {
     if (!script) return "";
     return script.startsWith("/") ? script : `/${script}`;
@@ -610,6 +625,10 @@ function optionLabel(key) {
         case "helper": return "Helper Text";
         default: return key;
     }
+}
+
+function buyModeLabel(mode) {
+    return mode === "aggressive" ? "Aggressive" : "Passive";
 }
 
 function triggerRefresh(ns) {

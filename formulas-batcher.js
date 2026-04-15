@@ -314,11 +314,27 @@ function collectWorkers(ns, homeRamReserve) {
         const usableRam = Math.max(0, maxRam - (host === "home" ? homeRamReserve : 0));
         if (usableRam <= 0) continue;
 
-        workers.push({ host, usableRam });
+        const type = host === "home" ? "home" : purchased.has(host) ? "purchased" : "rooted";
+        workers.push({ host, usableRam, type });
     }
 
     workers.sort((a, b) => b.usableRam - a.usableRam);
+    workers.sort((a, b) => {
+        const rankA = workerRank(a.type);
+        const rankB = workerRank(b.type);
+        if (rankA !== rankB) return rankA - rankB;
+        return b.usableRam - a.usableRam;
+    });
     return workers;
+}
+
+function workerRank(type) {
+    switch (type) {
+        case "purchased": return 0;
+        case "rooted": return 1;
+        case "home": return 2;
+        default: return 3;
+    }
 }
 
 function discoverHosts(ns) {
@@ -592,6 +608,17 @@ async function prepTarget(ns, workers, target, ramCosts, config) {
         ) {
             return true;
         }
+
+        writeStatus(ns, STATUS_NAMES.formulas, {
+            target,
+            action: `Prep | money ${stats.moneyPct.toFixed(1)}% | sec +${stats.secDiff.toFixed(2)}`,
+            moneyPct: stats.moneyPct,
+            secDiff: stats.secDiff,
+            chance: stats.chance,
+            freeRam: getTotalFreeRam(ns, workers),
+            usableRam: getTotalUsableRam(workers),
+            batchesSincePrep: 0,
+        });
 
         if (stats.secDiff > config.prepSecDiff) {
             const weakenThreads = Math.floor(
