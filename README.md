@@ -11,32 +11,24 @@ MarvOS is a Bitburner control shell built around one dashboard and a small set o
 
 ## In-Game Install
 
-First-time bootstrap still needs one script in Bitburner. After that, updates are one command.
+MarvOS is packaged so the runtime files come from one bundle. After the first tiny bootstrap, install and upgrades are one command.
 
 ### First install
 
-Create `MarvOS/install.js` in Bitburner and paste in the generated contents from this repo's `MarvOS/install.js`, then run:
-
 ```text
-run MarvOS/install.js
-run MarvOS/Loader.js
+wget https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS/load.js MarvOS/load.js
+run MarvOS/load.js
 ```
 
 ### Upgrades
 
-Once `MarvOS/load.js` exists in the game, updates are:
-
-```text
-run MarvOS/load.js https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt
-```
-
-After the first successful run, `load.js` remembers the source URL. Future upgrades are just:
+Once `MarvOS/load.js` exists in the game, upgrades are just:
 
 ```text
 run MarvOS/load.js
 ```
 
-That command downloads the latest bundle, overwrites the old files, and boots the new MarvOS immediately.
+That command downloads the latest bundle, overwrites the old files, and boots the new MarvOS immediately. No extra scripts need to be pasted into `home`.
 
 ## Repo Workflow
 

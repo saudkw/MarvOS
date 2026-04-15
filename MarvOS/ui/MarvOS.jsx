@@ -1,5 +1,5 @@
 import { loadOptions, saveOptions } from "/MarvOS/lib/options.js";
-import { readStatus, STATUS_NAMES } from "/MarvOS/lib/status.js";
+import { MARVOS_SOURCE_PATH, readStatus, STATUS_NAMES } from "/MarvOS/lib/status.js";
 import { getProgressSnapshot } from "/MarvOS/lib/progression.js";
 import { rankMoneyTargets } from "/MarvOS/lib/scoring.js";
 
@@ -64,25 +64,34 @@ export async function main(ns) {
         const progress = getProgressSnapshot(ns);
         const topTargets = rankMoneyTargets(ns, { limit: 6 });
         const modeState = deriveModeState(options, statuses.orchestrator, progress);
+        const network = getNetworkSummary(ns);
+        const diagnostics = getTargetDiagnostics(progress, statuses.formulas, topTargets);
+        const install = getInstallState(ns);
         const theme = ns.ui.getTheme();
 
         ns.clearLog();
-        ns.printRaw(renderHeader(theme, modeState));
+        ns.printRaw(renderHeader(theme, modeState, diagnostics, options, progress));
         ns.printRaw(renderModeBar(ns, theme, options, modeState));
         ns.printRaw(renderOverview(ns, theme, progress, modeState));
-        ns.printRaw(renderMainGrid(ns, theme, options, statuses, progress, modeState));
-        ns.printRaw(renderBottomGrid(ns, theme, topTargets, progress));
+        ns.printRaw(renderMainGrid(ns, theme, options, statuses, progress, modeState, network));
+        ns.printRaw(renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install, options));
 
         await waitForRefresh(ns);
     }
 }
 
-function renderHeader(theme, modeState) {
+function renderHeader(theme, modeState, diagnostics, options, progress) {
     return (
         <div style={heroStyle(theme)}>
             <div>
                 <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 1 }}>MarvOS</div>
                 <div style={{ opacity: 0.8, marginTop: 4 }}>Progression-first control plane for this run.</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                    {renderBadge(theme, `Target ${diagnostics.currentTarget || "none"}`, diagnostics.currentTarget ? "active" : "neutral")}
+                    {renderBadge(theme, `Buyer ${buyModeLabel(options.buyMode)}`, options.buyMode === "aggressive" ? "off" : "active")}
+                    {renderBadge(theme, `Stocks ${stockLabel(progress.stock)}`, progress.stock.autoTradeReady ? "active" : "neutral")}
+                    {renderBadge(theme, `Share ${progress.stock ? (options.shareHome || options.sharePurchased ? "armed" : "off") : "off"}`, options.shareHome || options.sharePurchased ? "active" : "neutral")}
+                </div>
             </div>
             <div style={{ textAlign: "right" }}>
                 <div style={{ opacity: 0.7, fontSize: 12, textTransform: "uppercase" }}>Current Mode</div>
@@ -144,7 +153,7 @@ function renderOverview(ns, theme, progress, modeState) {
     );
 }
 
-function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
+function renderMainGrid(ns, theme, options, statuses, progress, modeState, network) {
     const moneyRunning = isScriptRunning(ns, SCRIPTS.formulas);
     return (
         <div style={twoColumnGridStyle}>
@@ -166,7 +175,7 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                 <div style={buttonWrapStyle}>
                     <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.backdoor, [])}>Backdoor Next</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => runRootScript(ns, options.rootScript)}>Run Rooter</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => runBuyScript(ns, options.buyScript)}>Run Buyer</button>
+                    <button style={secondaryButtonStyle(theme)} onClick={() => runBuyScript(ns, options)}>Run Buyer</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.load, [])}>Load OS</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => openControlledLogs(ns)}>Open Logs</button>
                     <button style={dangerButtonStyle(theme)} onClick={() => stopManaged(ns)}>Stop Engines</button>
@@ -177,7 +186,9 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                     <button style={secondaryButtonStyle(theme)} onClick={() => setXpTarget(ns, options)}>XP Target</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setRootScript(ns, options)}>Root Script</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setBuyScript(ns, options)}>Buy Script</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleBuyMode(ns, options)}>Buy Mode</button>
+                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleBuyMode(ns, options)}>
+                        Buy Mode: {buyModeLabel(options.buyMode)}
+                    </button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setReserve(ns, options, "shareReserve", "Share reserve on home")}>Share Reserve</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => setReserve(ns, options, "homeReserve", "Home reserve for startup/xp")}>Home Reserve</button>
                 </div>
@@ -230,56 +241,128 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                 {renderStatusBlock(ns, theme, "Hacknet", statuses.hacknet, {
                     idleAction: "Idle",
                 })}
+
+                <div style={miniSectionTitle}>Network</div>
+                <div style={compactGridStyle(2)}>
+                    {renderStatTile(theme, "Workers", `${network.activeWorkers}/${network.totalWorkers}`)}
+                    {renderStatTile(theme, "Usable RAM", ns.formatRam(network.totalUsableRam, 2))}
+                    {renderStatTile(theme, "Money RAM", ns.formatRam(network.moneyRam, 2))}
+                    {renderStatTile(theme, "Share RAM", ns.formatRam(network.shareRam, 2))}
+                    {renderStatTile(theme, "Other RAM", ns.formatRam(network.otherRam, 2))}
+                    {renderStatTile(theme, "Free RAM", ns.formatRam(network.freeRam, 2))}
+                </div>
             </div>
         </div>
     );
 }
 
-function renderBottomGrid(ns, theme, topTargets, progress) {
+function renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install, options) {
     return (
-        <div style={twoColumnGridStyle}>
-            <div style={cardStyle(theme)}>
-                <div style={cardHeaderStyle}>
-                    <div style={cardTitleStyle}>Target Scoreboard</div>
-                    {renderBadge(theme, `${topTargets.length} ranked`, "neutral")}
-                </div>
-                {topTargets.length === 0
-                    ? <div style={{ opacity: 0.8 }}>No valid ranked targets.</div>
-                    : topTargets.map((row) => (
-                        <div key={row.host} style={tableRowStyle(theme)}>
-                            <div style={{ minWidth: 0 }}>
-                                <div style={{ fontWeight: 700 }}>{row.host}</div>
-                                <div style={{ opacity: 0.76, marginTop: 2 }}>
-                                    req={row.requiredHack} | chance={(row.chance * 100).toFixed(1)}% | hack={Math.round(row.hackTime / 1000)}s
+        <div>
+            <div style={twoColumnGridStyle}>
+                <div style={cardStyle(theme)}>
+                    <div style={cardHeaderStyle}>
+                        <div style={cardTitleStyle}>Target Scoreboard</div>
+                        {renderBadge(theme, `${topTargets.length} ranked`, "neutral")}
+                    </div>
+                    {topTargets.length === 0
+                        ? <div style={{ opacity: 0.8 }}>No valid ranked targets.</div>
+                        : topTargets.map((row) => (
+                            <div key={row.host} style={tableRowStyle(theme)}>
+                                <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 700 }}>{row.host}</div>
+                                    <div style={{ opacity: 0.76, marginTop: 2 }}>
+                                        req={row.requiredHack} | chance={(row.chance * 100).toFixed(1)}% | hack={Math.round(row.hackTime / 1000)}s
+                                    </div>
+                                </div>
+                                <div style={{ textAlign: "right" }}>
+                                    <div>{Math.floor(row.score)}</div>
+                                    <div style={{ opacity: 0.76, marginTop: 2 }}>{ns.formatNumber(row.maxMoney, 2)}</div>
                                 </div>
                             </div>
-                            <div style={{ textAlign: "right" }}>
-                                <div>{Math.floor(row.score)}</div>
-                                <div style={{ opacity: 0.76, marginTop: 2 }}>{ns.formatNumber(row.maxMoney, 2)}</div>
+                        ))}
+                </div>
+
+                <div style={cardStyle(theme)}>
+                    <div style={cardHeaderStyle}>
+                        <div style={cardTitleStyle}>Progression</div>
+                        {renderBadge(theme, `${progress.factions.length} factions`, "neutral")}
+                    </div>
+                    {progress.milestones.map((m) => (
+                        <div key={m.name} style={tableRowStyle(theme)}>
+                            <div>
+                                <div style={{ fontWeight: 700 }}>{m.name}</div>
+                                <div style={{ opacity: 0.76, marginTop: 2 }}>{m.faction}</div>
+                            </div>
+                            <div style={{ textAlign: "right", opacity: 0.9 }}>
+                                <div>req={m.requiredHack ?? "?"}</div>
+                                <div style={{ marginTop: 2 }}>
+                                    rooted={yesNo(m.rooted)} | backdoor={yesNo(m.backdoored)} | joined={yesNo(m.joined)}
+                                </div>
                             </div>
                         </div>
                     ))}
-            </div>
-
-            <div style={cardStyle(theme)}>
-                <div style={cardHeaderStyle}>
-                    <div style={cardTitleStyle}>Progression</div>
-                    {renderBadge(theme, `${progress.factions.length} factions`, "neutral")}
                 </div>
-                {progress.milestones.map((m) => (
-                    <div key={m.name} style={tableRowStyle(theme)}>
-                        <div>
-                            <div style={{ fontWeight: 700 }}>{m.name}</div>
-                            <div style={{ opacity: 0.76, marginTop: 2 }}>{m.faction}</div>
-                        </div>
-                        <div style={{ textAlign: "right", opacity: 0.9 }}>
-                            <div>req={m.requiredHack ?? "?"}</div>
-                            <div style={{ marginTop: 2 }}>
-                                rooted={yesNo(m.rooted)} | backdoor={yesNo(m.backdoored)} | joined={yesNo(m.joined)}
-                            </div>
-                        </div>
+            </div>
+            <div style={twoColumnGridStyle}>
+                <div style={cardStyle(theme)}>
+                    <div style={cardHeaderStyle}>
+                        <div style={cardTitleStyle}>Target Diagnostics</div>
+                        {renderBadge(theme, diagnostics.state, diagnostics.state === "Batching" ? "active" : "neutral")}
                     </div>
-                ))}
+                    <div style={compactGridStyle(2)}>
+                        {renderStatTile(theme, "Current", diagnostics.currentTarget || "none")}
+                        {renderStatTile(theme, "Top Candidate", diagnostics.topCandidate || "none")}
+                        {renderStatTile(theme, "Action", diagnostics.action)}
+                        {renderStatTile(theme, "Chance", diagnostics.chance)}
+                        {renderStatTile(theme, "Money", diagnostics.money)}
+                        {renderStatTile(theme, "Security", diagnostics.security)}
+                        {renderStatTile(theme, "Hack %", diagnostics.hackPct)}
+                        {renderStatTile(theme, "Interval", diagnostics.interval)}
+                    </div>
+                    {options.formulasDebug && diagnostics.debug.length > 0 ? (
+                        <div style={{ marginTop: 10 }}>
+                            <div style={miniSectionTitle}>Debug</div>
+                            {diagnostics.debug.map((line, index) => (
+                                <div key={`${index}:${line}`} style={debugLineStyle}>{line}</div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div style={{ marginTop: 10, opacity: 0.75 }}>
+                            {options.formulasDebug ? "No target debug lines yet." : "Enable Formulas Debug to show accept/reject reasoning here."}
+                        </div>
+                    )}
+                </div>
+
+                <div style={cardStyle(theme)}>
+                    <div style={cardHeaderStyle}>
+                        <div style={cardTitleStyle}>Install And Updates</div>
+                        {renderBadge(theme, install.hasSavedSource ? "Saved Source" : "Default Source", "neutral")}
+                    </div>
+                    <div style={compactGridStyle(2)}>
+                        {renderStatTile(theme, "Bundle Source", install.sourceLabel)}
+                        {renderStatTile(theme, "Bootstrap", "wget + run")}
+                        {renderStatTile(theme, "Updater", "run MarvOS/load.js")}
+                        {renderStatTile(theme, "Installer", "/MarvOS/install.js")}
+                    </div>
+                    <div style={{ marginTop: 10, opacity: 0.82 }}>
+                        First install:
+                    </div>
+                    <div style={codeLineStyle}>
+                        wget {install.loaderUrl} MarvOS/load.js
+                    </div>
+                    <div style={codeLineStyle}>
+                        run MarvOS/load.js
+                    </div>
+                    <div style={{ marginTop: 10, opacity: 0.82 }}>
+                        Current bundle source:
+                    </div>
+                    <div style={codeLineStyle}>{install.source}</div>
+                    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.load, [])}>Load OS Now</button>
+                        <button style={secondaryButtonStyle(theme)} onClick={() => setBundleSource(ns)}>Set Source</button>
+                    </div>
+                </div>
             </div>
         </div>
     );
@@ -361,6 +444,106 @@ function renderWideTile(theme, label, value, span = 2) {
             <div style={{ marginTop: 6 }}>{value}</div>
         </div>
     );
+}
+
+function getNetworkSummary(ns) {
+    const purchased = new Set(ns.getPurchasedServers());
+    const hosts = discoverHosts(ns, purchased);
+    let totalWorkers = 0;
+    let activeWorkers = 0;
+    let totalUsableRam = 0;
+    let freeRam = 0;
+    let moneyRam = 0;
+    let shareRam = 0;
+    let otherRam = 0;
+
+    for (const host of hosts) {
+        if (!ns.hasRootAccess(host)) continue;
+        const maxRam = ns.getServerMaxRam(host);
+        if (maxRam <= 0) continue;
+        const reserve = host === "home" ? 32 : 0;
+        const usable = Math.max(0, maxRam - reserve);
+        if (usable <= 0) continue;
+
+        totalWorkers += 1;
+        totalUsableRam += usable;
+        freeRam += Math.max(0, usable - ns.getServerUsedRam(host));
+
+        let hostActive = false;
+        for (const proc of ns.ps(host)) {
+            const ram = proc.threads * ns.getScriptRam(proc.filename, host);
+            if (["hack.js", "grow.js", "weaken.js", "formulas-batcher.js", "startup.js", "xp-grind.js"].includes(proc.filename)) {
+                moneyRam += ram;
+                hostActive = true;
+            } else if (proc.filename === "share-worker.js" || proc.filename === "rep-share.js") {
+                shareRam += ram;
+                hostActive = true;
+            } else {
+                otherRam += ram;
+            }
+        }
+
+        if (hostActive) activeWorkers += 1;
+    }
+
+    return { totalWorkers, activeWorkers, totalUsableRam, freeRam, moneyRam, shareRam, otherRam };
+}
+
+function getTargetDiagnostics(progress, formulasStatus, topTargets) {
+    const batchPlan = formulasStatus?.batchPlan ?? null;
+    return {
+        currentTarget: formulasStatus?.target ?? "",
+        topCandidate: topTargets[0]?.host ?? "",
+        state: inferTargetState(formulasStatus),
+        action: formulasStatus?.action ?? "idle",
+        chance: formulasStatus?.chance !== undefined ? `${(Number(formulasStatus.chance) * 100).toFixed(1)}%` : "n/a",
+        money: formulasStatus?.moneyPct !== undefined ? `${Number(formulasStatus.moneyPct).toFixed(1)}%` : "n/a",
+        security: formulasStatus?.secDiff !== undefined ? `+${Number(formulasStatus.secDiff).toFixed(2)}` : "n/a",
+        hackPct: batchPlan?.hackPct !== undefined ? `${(Number(batchPlan.hackPct) * 100).toFixed(2)}%` : "n/a",
+        interval: batchPlan?.launchInterval !== undefined ? `${Math.round(Number(batchPlan.launchInterval))}ms` : "n/a",
+        debug: Array.isArray(formulasStatus?.debug) ? formulasStatus.debug.slice(0, 8) : [],
+    };
+}
+
+function inferTargetState(formulasStatus) {
+    const action = String(formulasStatus?.action ?? "").toLowerCase();
+    if (!action) return "Idle";
+    if (action.includes("prep")) return "Prepping";
+    if (action.includes("hwgw")) return "Batching";
+    if (action.includes("waiting")) return "Waiting";
+    return "Active";
+}
+
+function getInstallState(ns) {
+    const source = readSource(ns);
+    const loaderUrl = "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS/load.js";
+    return {
+        source: source || "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt",
+        sourceLabel: source ? "custom" : "default repo",
+        hasSavedSource: Boolean(source),
+        loaderUrl,
+    };
+}
+
+function readSource(ns) {
+    if (!ns.fileExists(MARVOS_SOURCE_PATH, "home")) return "";
+    return String(ns.read(MARVOS_SOURCE_PATH) ?? "").trim();
+}
+
+function discoverHosts(ns, purchased = new Set(ns.getPurchasedServers())) {
+    const seen = new Set(["home"]);
+    const queue = ["home"];
+    while (queue.length > 0) {
+        const host = queue.shift();
+        for (const next of ns.scan(host)) {
+            if (!seen.has(next)) {
+                seen.add(next);
+                queue.push(next);
+            }
+        }
+    }
+    for (const host of purchased) seen.add(host);
+    return seen;
 }
 
 function deriveModeState(options, orchestratorStatus, progress) {
@@ -496,8 +679,8 @@ function runRootScript(ns, rootScript) {
     triggerRefresh(ns);
 }
 
-function runBuyScript(ns, buyScript) {
-    const script = normalizeScriptPath(buyScript);
+function runBuyScript(ns, options) {
+    const script = normalizeScriptPath(options.buyScript);
     if (!script) {
         notify(ns, "No buy script configured");
         return;
@@ -506,7 +689,7 @@ function runBuyScript(ns, buyScript) {
         notify(ns, `Buy script missing: ${script}`);
         return;
     }
-    const pid = ns.exec(script, "home", 1);
+    const pid = ns.exec(script, "home", 1, ...buildBuyArgs(options.buyMode));
     notify(ns, pid > 0 ? `Started ${script}` : `Failed to start ${script}`);
     triggerRefresh(ns);
 }
@@ -569,6 +752,17 @@ async function setBuyScript(ns, options) {
     triggerRefresh(ns);
 }
 
+async function setBundleSource(ns) {
+    const current = readSource(ns) || "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt";
+    const result = await ns.prompt(`Bundle source URL.\nCurrent: ${current}`, { type: "text" });
+    if (result === false) return;
+    const value = String(result || "").trim();
+    if (!value) return;
+    ns.write(MARVOS_SOURCE_PATH, value, "w");
+    notify(ns, "Bundle source updated");
+    triggerRefresh(ns);
+}
+
 async function setReserve(ns, options, key, label) {
     const result = await ns.prompt(label, { type: "text" });
     if (result === false) return;
@@ -599,6 +793,16 @@ function toggleBuyMode(ns, options) {
     saveOptions(ns, options);
     notify(ns, `Buy mode -> ${buyModeLabel(options.buyMode)}`);
     triggerRefresh(ns);
+}
+
+function buildBuyArgs(mode) {
+    const args = ["--prefix", "MiniMarv-"];
+    if (mode === "aggressive") {
+        args.push("--budget-pct", "0.90", "--reserve", "50_000_000", "--interval", "12000", "--max-ops", "8");
+    } else {
+        args.push("--budget-pct", "0.25", "--reserve", "250_000_000", "--interval", "20000", "--max-ops", "1");
+    }
+    return args;
 }
 
 function normalizeScriptPath(script) {
@@ -753,6 +957,22 @@ function statusCardStyle(theme) {
         marginBottom: 8,
     };
 }
+
+const codeLineStyle = {
+    border: "1px solid rgba(0,255,65,0.25)",
+    backgroundColor: "rgba(255,255,255,0.02)",
+    padding: "8px 10px",
+    marginTop: 6,
+    overflowWrap: "anywhere",
+};
+
+const debugLineStyle = {
+    borderTop: "1px solid rgba(0,255,65,0.12)",
+    paddingTop: 6,
+    marginTop: 6,
+    opacity: 0.82,
+    overflowWrap: "anywhere",
+};
 
 function secondaryButtonStyle(theme) {
     return {

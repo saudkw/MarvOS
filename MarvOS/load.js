@@ -1,17 +1,11 @@
-const SOURCE_PATH = "/MarvOS/data/source.txt";
+export const DEFAULT_BUNDLE_SOURCE = "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt";
+const MARVOS_SOURCE_PATH = "/MarvOS/data/source.txt";
 const TEMP_PATH = "/MarvOS/data/load-bundle.txt";
 
 /** @param {NS} ns */
 export async function main(ns) {
     const sourceArg = String(ns.args[0] ?? "").trim();
-    const source = sourceArg || loadSavedSource(ns);
-
-    if (!source) {
-        ns.tprint("MarvOS/load.js: no bundle URL configured");
-        ns.tprint("Run once with a raw GitHub bundle URL, for example:");
-        ns.tprint("run MarvOS/load.js https://raw.githubusercontent.com/<user>/<repo>/<branch>/MarvOS.bundle.txt");
-        return;
-    }
+    const source = sourceArg || getBundleSource(ns);
 
     ns.rm(TEMP_PATH, "home");
     const ok = await ns.wget(source, TEMP_PATH, "home");
@@ -51,16 +45,21 @@ export async function main(ns) {
     }
 
     if (sourceArg) {
-        ns.write(SOURCE_PATH, source, "w");
+        ns.write(MARVOS_SOURCE_PATH, source, "w");
     }
 
     ns.tprint(`[MarvOS] Loaded ${written} files from bundle`);
     ns.spawn("/MarvOS/Loader.js", 1);
 }
 
+export function getBundleSource(ns) {
+    const saved = loadSavedSource(ns);
+    return saved || DEFAULT_BUNDLE_SOURCE;
+}
+
 function loadSavedSource(ns) {
-    if (!ns.fileExists(SOURCE_PATH, "home")) return "";
-    return String(ns.read(SOURCE_PATH) ?? "").trim();
+    if (!ns.fileExists(MARVOS_SOURCE_PATH, "home")) return "";
+    return String(ns.read(MARVOS_SOURCE_PATH) ?? "").trim();
 }
 
 function normalizePath(path) {

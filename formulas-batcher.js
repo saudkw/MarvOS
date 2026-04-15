@@ -875,6 +875,7 @@ function maybePrintStatus(ns, config, snapshot, now, getLastStatusAt, setLastSta
                 batchRam: snapshot.batchPlan.batchRam,
             }
             : null,
+        debug: config.debugTargets ? snapshot.debug ?? [] : [],
     });
 
     setLastStatusAt(now);

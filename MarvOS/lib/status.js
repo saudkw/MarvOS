@@ -7,6 +7,8 @@ export const STATUS_NAMES = {
     stock: "stock-trader",
 };
 
+export const MARVOS_SOURCE_PATH = "/MarvOS/data/source.txt";
+
 const BASE = "/MarvOS/data";
 
 export function statusPath(name) {
