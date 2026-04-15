@@ -1,0 +1,8 @@
+{
+  "name": "marvos-bitburner",
+  "private": true,
+  "scripts": {
+    "sync": "npx bitburner-filesync",
+    "sync:quiet": "npx bitburner-filesync"
+  }
+}
