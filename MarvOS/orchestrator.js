@@ -9,6 +9,7 @@ const SCRIPTS = {
     rep: "/rep-share.js",
     stock: "/stock-trader.js",
 };
+const SHARE_WORKER = "/share-worker.js";
 
 const DEFAULT_OPTIONS = {
     rootScript: "/rootall.js",
@@ -43,6 +44,7 @@ export async function main(ns) {
         maybeBuyTor(ns, options);
         const progress = getProgressSnapshot(ns);
         const decision = resolveMode(ns, options, progress);
+        cleanupBeforeMode(ns, options, decision.mode);
 
         if (decision.mode !== lastMode) {
             ns.tprint(`MarvOS MODE -> ${decision.mode.toUpperCase()} | ${decision.reason}`);
@@ -86,7 +88,7 @@ function maybeRunBuyScript(ns, options, activeMode) {
     const script = normalizeScriptPath(options.buyScript);
     if (!script) return;
     if (!ns.fileExists(script, "home")) return;
-    if (ns.isRunning(script, "home")) return;
+    if (findProcesses(ns, script).length > 0) return;
 
     const requiredCore = getCoreScriptForMode(activeMode);
     if (requiredCore && !findProcess(ns, requiredCore)) return;
@@ -203,6 +205,10 @@ function findProcess(ns, script) {
     return ns.ps("home").find((proc) => matchesScript(proc.filename, script));
 }
 
+function findProcesses(ns, script) {
+    return ns.ps("home").filter((proc) => matchesScript(proc.filename, script));
+}
+
 function buildStartupArgs(options) {
     return [
         "--root-script",
@@ -275,4 +281,48 @@ function normalizeScriptPath(script) {
 function matchesScript(actual, expected) {
     const normalized = normalizeScriptPath(expected);
     return actual === normalized || actual === normalized.slice(1);
+}
+
+function cleanupBeforeMode(ns, options, mode) {
+    cleanupDuplicateHomeProcesses(ns, normalizeScriptPath(options.buyScript));
+    if (mode !== "rep") {
+        killShareWorkers(ns);
+    }
+}
+
+function cleanupDuplicateHomeProcesses(ns, script) {
+    if (!script) return;
+    const procs = findProcesses(ns, script);
+    if (procs.length <= 1) return;
+
+    for (const proc of procs.slice(1)) {
+        ns.kill(proc.pid);
+    }
+}
+
+function killShareWorkers(ns) {
+    for (const host of discoverHosts(ns)) {
+        ns.scriptKill(SHARE_WORKER, host);
+    }
+}
+
+function discoverHosts(ns) {
+    const seen = new Set(["home"]);
+    const queue = ["home"];
+
+    while (queue.length > 0) {
+        const host = queue.shift();
+        for (const next of ns.scan(host)) {
+            if (!seen.has(next)) {
+                seen.add(next);
+                queue.push(next);
+            }
+        }
+    }
+
+    for (const host of ns.getPurchasedServers()) {
+        seen.add(host);
+    }
+
+    return seen;
 }
