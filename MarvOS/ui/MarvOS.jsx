@@ -205,7 +205,10 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState) {
                     fallbackText: modeState.reason,
                 })}
                 {renderStatusBlock(ns, theme, "Money Engine", statuses.formulas, {
-                    idleAction: "Idle",
+                    idleAction: modeState.currentMode === "money" || modeState.currentMode === "rep" ? "Not running" : "Idle",
+                    fallbackText: (modeState.currentMode === "money" || modeState.currentMode === "rep")
+                        ? formatOrchestratorNotes(statuses.orchestrator?.notes)
+                        : undefined,
                 })}
                 {renderStatusBlock(ns, theme, "Startup", statuses.startup, {
                     idleAction: "Idle",
@@ -404,6 +407,13 @@ function ageText(updatedAt) {
     if (seconds < 2) return "live";
     if (seconds < 60) return `${seconds}s ago`;
     return `${Math.floor(seconds / 60)}m ago`;
+}
+
+function formatOrchestratorNotes(notes) {
+    if (!Array.isArray(notes) || notes.length === 0) {
+        return "Check home RAM and target eligibility.";
+    }
+    return notes.join(" | ");
 }
 
 function modeLabel(mode) {

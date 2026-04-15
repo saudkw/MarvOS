@@ -40,7 +40,6 @@ export async function main(ns) {
     while (true) {
         const options = loadOptions(ns, DEFAULT_OPTIONS);
         maybeBuyTor(ns, options);
-        maybeRunBuyScript(ns, options);
         const progress = getProgressSnapshot(ns);
         const decision = resolveMode(ns, options, progress);
 
@@ -49,13 +48,15 @@ export async function main(ns) {
             lastMode = decision.mode;
         }
 
-        applyMode(ns, options, decision.mode);
-        applyStockMode(ns, options, progress);
+        const launchNotes = applyMode(ns, options, decision.mode);
+        const stockNote = applyStockMode(ns, options, progress);
+        maybeRunBuyScript(ns, options, decision.mode);
         writeStatus(ns, STATUS_NAMES.orchestrator, {
             mode: decision.mode,
             requestedMode: options.autoMode ? "auto" : options.selectedMode,
             autoMode: options.autoMode,
             reason: decision.reason,
+            notes: [...launchNotes, ...(stockNote ? [stockNote] : [])],
             recommendation: progress.recommendation,
             hacking: progress.hacking,
             nextHackGoal: progress.nextHackGoal,
@@ -80,11 +81,19 @@ function maybeBuyTor(ns, options) {
     }
 }
 
-function maybeRunBuyScript(ns, options) {
+function maybeRunBuyScript(ns, options, activeMode) {
     const script = normalizeScriptPath(options.buyScript);
     if (!script) return;
     if (!ns.fileExists(script, "home")) return;
     if (ns.isRunning(script, "home")) return;
+
+    const requiredCore = getCoreScriptForMode(activeMode);
+    if (requiredCore && !findProcess(ns, requiredCore)) return;
+
+    const needed = ns.getScriptRam(script, "home");
+    const free = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+    if (free < needed + 4) return;
+
     ns.exec(script, "home", 1);
 }
 
@@ -124,9 +133,10 @@ function resolveMode(ns, options, progress) {
 }
 
 function applyMode(ns, options, mode) {
+    const notes = [];
     switch (mode) {
         case "startup":
-            ensureRunning(ns, SCRIPTS.startup, buildStartupArgs(options));
+            notes.push(...ensureRunning(ns, SCRIPTS.startup, buildStartupArgs(options), "startup engine"));
             ensureStopped(ns, SCRIPTS.money);
             ensureStopped(ns, SCRIPTS.xp);
             ensureStopped(ns, SCRIPTS.rep);
@@ -134,39 +144,50 @@ function applyMode(ns, options, mode) {
         case "xp":
             ensureStopped(ns, SCRIPTS.startup);
             ensureStopped(ns, SCRIPTS.money);
-            ensureRunning(ns, SCRIPTS.xp, buildXpArgs(options));
+            notes.push(...ensureRunning(ns, SCRIPTS.xp, buildXpArgs(options), "xp engine"));
             ensureStopped(ns, SCRIPTS.rep);
             break;
         case "rep":
             ensureStopped(ns, SCRIPTS.startup);
             ensureStopped(ns, SCRIPTS.xp);
-            ensureRunning(ns, SCRIPTS.money, buildMoneyArgs(options));
-            ensureRunning(ns, SCRIPTS.rep, buildRepArgs(options));
+            notes.push(...ensureRunning(ns, SCRIPTS.money, buildMoneyArgs(options), "money engine"));
+            notes.push(...ensureRunning(ns, SCRIPTS.rep, buildRepArgs(options), "rep engine"));
             break;
         case "money":
         default:
             ensureStopped(ns, SCRIPTS.startup);
             ensureStopped(ns, SCRIPTS.xp);
-            ensureRunning(ns, SCRIPTS.money, buildMoneyArgs(options));
+            notes.push(...ensureRunning(ns, SCRIPTS.money, buildMoneyArgs(options), "money engine"));
             ensureStopped(ns, SCRIPTS.rep);
             break;
     }
+    return notes;
 }
 
 function applyStockMode(ns, options, progress) {
     if (!options.autoTrade || !progress.stock.autoTradeReady) {
         ensureStopped(ns, SCRIPTS.stock);
-        return;
+        return "";
     }
 
-    ensureRunning(ns, SCRIPTS.stock, []);
+    return ensureRunning(ns, SCRIPTS.stock, [], "stock trader").join(" | ");
 }
 
-function ensureRunning(ns, script, args) {
+function ensureRunning(ns, script, args, label) {
     const proc = findProcess(ns, script);
-    if (proc) return;
-    if (!ns.fileExists(script, "home")) return;
-    ns.exec(script, "home", 1, ...args);
+    if (proc) return [];
+    if (!ns.fileExists(script, "home")) return [`missing ${label}: ${script}`];
+
+    const pid = ns.exec(script, "home", 1, ...args);
+    if (pid === 0) {
+        const ram = ns.getScriptRam(script, "home");
+        const free = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+        const message = `failed to start ${label} (${ns.formatRam(free, 2)} free / ${ns.formatRam(ram, 2)} needed)`;
+        ns.tprint(`MarvOS: ${message}`);
+        return [message];
+    }
+
+    return [];
 }
 
 function ensureStopped(ns, script) {
@@ -218,6 +239,17 @@ function getRunningModes(ns) {
         rep: Boolean(findProcess(ns, SCRIPTS.rep)),
         stock: Boolean(findProcess(ns, SCRIPTS.stock)),
     };
+}
+
+function getCoreScriptForMode(mode) {
+    switch (mode) {
+        case "startup": return SCRIPTS.startup;
+        case "xp": return SCRIPTS.xp;
+        case "rep": return SCRIPTS.money;
+        case "money":
+        default:
+            return SCRIPTS.money;
+    }
 }
 
 function normalizeMode(mode) {

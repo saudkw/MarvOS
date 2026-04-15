@@ -46,8 +46,8 @@ export async function main(ns) {
         liveMoneyPct: 0.92,
         liveSecDiff: 1.0,
         maxHackPct: 0.30,
-        minHackPct: 0.005,
-        hackPctStep: 0.005,
+        minHackPct: 0.001,
+        hackPctStep: 0.001,
         maxBatchesBeforePrep: 100,
         targetCooldownMs: 10 * 60 * 1000,
         takeoverWorkersAtStart: true,
@@ -356,26 +356,30 @@ function killWorkerScripts(ns, workers) {
 
 function rankTargets(ns, config, totalUsableRam, ramCosts, cooldowns) {
     const thresholds = getTargetMoneyThresholds(ns, config);
-    const primary = rankTargetsAtThreshold(
-        ns,
-        config,
-        totalUsableRam,
-        ramCosts,
-        cooldowns,
-        thresholds.primary,
-        config.primaryHackGate
-    );
-    if (primary.ranked.length > 0) return primary;
+    const passes = [
+        { minMoney: thresholds.primary, hackGate: config.primaryHackGate },
+        { minMoney: thresholds.fallback, hackGate: config.fallbackHackGate },
+        { minMoney: 10_000_000, hackGate: 0.65 },
+        { minMoney: 1_000_000, hackGate: 0.80 },
+        { minMoney: 0, hackGate: 1.00 },
+    ];
 
-    return rankTargetsAtThreshold(
-        ns,
-        config,
-        totalUsableRam,
-        ramCosts,
-        cooldowns,
-        thresholds.fallback,
-        config.fallbackHackGate
-    );
+    let last = { ranked: [], debug: [] };
+    for (const pass of passes) {
+        const result = rankTargetsAtThreshold(
+            ns,
+            config,
+            totalUsableRam,
+            ramCosts,
+            cooldowns,
+            pass.minMoney,
+            pass.hackGate
+        );
+        if (result.ranked.length > 0) return result;
+        last = result;
+    }
+
+    return last;
 }
 
 function rankTargetsAtThreshold(ns, config, totalUsableRam, ramCosts, cooldowns, minMoneyThreshold, hackGate) {
