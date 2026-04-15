@@ -776,13 +776,14 @@ function dispatchBatch(ns, workers, target, plan, tagBase, batchOffset, ramCosts
 function dispatchSingleJob(ns, workers, file, threads, ramPerThread, target, delay, tag) {
     let remaining = threads;
     let scheduled = 0;
-    const eligible = workers.filter(worker => Math.floor(getWorkerFreeRam(ns, worker) / ramPerThread) > 0);
+    const rotated = rotateWorkers(workers, workers.length > 0 ? hashTag(tag) % workers.length : 0);
+    const eligible = rotated.filter(worker => Math.floor(getWorkerFreeRam(ns, worker) / ramPerThread) > 0);
 
     if (eligible.length === 0) {
         return { scheduled, requested: threads };
     }
 
-    const firstPassCap = Math.max(1, Math.ceil(threads / eligible.length));
+    const firstPassCap = 1;
 
     for (const worker of eligible) {
         if (remaining <= 0) break;
@@ -813,6 +814,15 @@ function dispatchSingleJob(ns, workers, file, threads, ramPerThread, target, del
     }
 
     return { scheduled, requested: threads };
+}
+
+function hashTag(value) {
+    let hash = 0;
+    for (let i = 0; i < value.length; i += 1) {
+        hash = ((hash << 5) - hash) + value.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash);
 }
 
 function rotateWorkers(workers, offset) {
