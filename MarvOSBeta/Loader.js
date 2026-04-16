@@ -1,7 +1,7 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    const ui = "/MarvOS/ui/MarvOS.jsx";
-    killIfRunning(ns, "/MarvOSBeta/ui/MarvOSBeta.jsx");
+    const ui = "/MarvOSBeta/ui/MarvOSBeta.jsx";
+    killIfRunning(ns, "/MarvOS/ui/MarvOS.jsx");
     killIfRunning(ns, ui);
     await ns.sleep(50);
 

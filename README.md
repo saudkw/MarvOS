@@ -4,7 +4,8 @@ MarvOS is a Bitburner control shell built around one dashboard and a small set o
 
 ## What Is In This Repo
 
-- `MarvOS/`: UI, orchestration, loader, and repo-based update flow
+- `MarvOS/`: classic UI, orchestration, loader, and repo-based update flow
+- `MarvOSBeta/`: hook-driven Beta UI using the same backend and engine scripts
 - root scripts such as `formulas-batcher.js`, `startup.js`, `xp-grind.js`, `hacknet-manager.js`, and `stock-trader.js`
 - `MarvOS.bundle.txt`: the bundled payload that Bitburner downloads and installs
 - `tools/build_marvos_installer.py`: regenerates both `MarvOS/install.js` and `MarvOS.bundle.txt`
@@ -29,6 +30,22 @@ run MarvOS/load.js
 ```
 
 That command downloads the latest bundle, overwrites the old files, and boots the new MarvOS immediately. No extra scripts need to be pasted into `home`.
+
+## Launching The UI
+
+Classic UI:
+
+```text
+run MarvOS/Loader.js
+```
+
+Beta UI:
+
+```text
+run MarvOSBeta/Loader.js
+```
+
+Both frontends use the same backend, orchestrator, and engine scripts.
 
 ## Repo Workflow
 

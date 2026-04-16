@@ -16,6 +16,8 @@ FILES = [
     "MarvOS/reload.js",
     "MarvOS/orchestrator.js",
     "MarvOS/ui/MarvOS.jsx",
+    "MarvOSBeta/Loader.js",
+    "MarvOSBeta/ui/MarvOSBeta.jsx",
     "MarvOS/lib/status.js",
     "MarvOS/lib/options.js",
     "MarvOS/lib/progression.js",
