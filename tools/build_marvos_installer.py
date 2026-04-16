@@ -20,6 +20,7 @@ FILES = [
     "MarvOSBeta/ui/MarvOSBeta.jsx",
     "MarvOS/lib/status.js",
     "MarvOS/lib/options.js",
+    "MarvOS/lib/runtime.js",
     "MarvOS/lib/money-core.js",
     "MarvOS/lib/progression.js",
     "MarvOS/lib/scoring.js",

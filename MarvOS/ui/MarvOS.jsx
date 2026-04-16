@@ -2,6 +2,7 @@ import { loadOptions, saveOptions } from "/MarvOS/lib/options.js";
 import { MARVOS_SOURCE_PATH, readStatus, STATUS_NAMES } from "/MarvOS/lib/status.js";
 import { getProgressSnapshot } from "/MarvOS/lib/progression.js";
 import { rankMoneyTargets } from "/MarvOS/lib/scoring.js";
+import { isScriptRunningOnHome, stopManagedRuntime } from "/MarvOS/lib/runtime.js";
 
 const SCRIPTS = {
     orchestrator: "/MarvOS/orchestrator.js",
@@ -14,14 +15,6 @@ const SCRIPTS = {
     stock: "/stock-trader.js",
     backdoor: "/backdoor-targets.js",
 };
-const ENGINE_SCRIPTS = [
-    SCRIPTS.startup,
-    SCRIPTS.formulas,
-    SCRIPTS.xp,
-    SCRIPTS.hacknet,
-    SCRIPTS.share,
-    SCRIPTS.stock,
-];
 
 const DEFAULT_OPTIONS = {
     rootScript: "/rootall.js",
@@ -38,14 +31,19 @@ const DEFAULT_OPTIONS = {
     autoTor: true,
     autoTrade: false,
     buyMode: "passive",
+    showScoreboard: false,
+    showDiagnostics: false,
 };
 
 const REFRESH_PORT = 20;
 const MODES = ["startup", "money", "xp", "rep"];
 const TARGET_CACHE_MS = 15_000;
+const NETWORK_CACHE_MS = 5_000;
 
 let cachedTargets = [];
 let cachedTargetsAt = 0;
+let cachedNetwork = null;
+let cachedNetworkAt = 0;
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -65,9 +63,10 @@ export async function main(ns) {
             stock: readStatus(ns, STATUS_NAMES.stock),
         };
         const progress = getProgressSnapshot(ns);
-        const topTargets = getCachedTopTargets(ns, 6);
+        const shouldRankTargets = options.showScoreboard || options.showDiagnostics || options.formulasDebug;
+        const topTargets = shouldRankTargets ? getCachedTopTargets(ns, 6) : [];
         const modeState = deriveModeState(options, statuses.orchestrator, progress);
-        const network = getNetworkSummary(ns);
+        const network = getCachedNetworkSummary(ns);
         const diagnostics = getTargetDiagnostics(progress, statuses.formulas, topTargets);
         const install = getInstallState(ns);
         const theme = ns.ui.getTheme();
@@ -91,7 +90,7 @@ function renderHeader(ns, theme, modeState, diagnostics, options, progress) {
                 <div style={{ opacity: 0.8, marginTop: 4 }}>Progression-first control plane for this run.</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                     {renderBadge(theme, `Target ${diagnostics.currentTarget || "none"}`, diagnostics.currentTarget ? "active" : "neutral")}
-                    {renderBadge(theme, `Automation ${isScriptRunning(ns, SCRIPTS.orchestrator) ? "armed" : "off"}`, isScriptRunning(ns, SCRIPTS.orchestrator) ? "active" : "neutral")}
+                    {renderBadge(theme, `Automation ${isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "armed" : "off"}`, isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "active" : "neutral")}
                     {renderBadge(theme, `Buyer ${buyModeLabel(options.buyMode)}`, options.buyMode === "aggressive" ? "off" : "active")}
                     {renderBadge(theme, `Stocks ${stockLabel(progress.stock)}`, progress.stock.autoTradeReady ? "active" : "neutral")}
                     {renderBadge(theme, `Share ${progress.stock ? (options.shareHome || options.sharePurchased ? "armed" : "off") : "off"}`, options.shareHome || options.sharePurchased ? "active" : "neutral")}
@@ -112,10 +111,10 @@ function renderModeBar(ns, theme, options, modeState) {
             <div style={cardHeaderStyle}>
                 <div style={cardTitleStyle}>Mode Bar</div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    {renderBadge(theme, isScriptRunning(ns, SCRIPTS.orchestrator) ? "Automation Armed" : "Automation Off", isScriptRunning(ns, SCRIPTS.orchestrator) ? "active" : "off")}
+                    {renderBadge(theme, isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "Automation Armed" : "Automation Off", isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "active" : "off")}
                     {renderBadge(theme, options.autoMode ? "Auto On" : "Manual", options.autoMode ? "active" : "off")}
                     <button style={secondaryButtonStyle(theme)} onClick={() => toggleAutomation(ns)}>
-                        {isScriptRunning(ns, SCRIPTS.orchestrator) ? "Stop Automation" : "Start Automation"}
+                        {isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "Stop Automation" : "Start Automation"}
                     </button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => toggleAutoMode(ns, options)}>
                         {options.autoMode ? "Turn Auto Off" : "Turn Auto On"}
@@ -162,7 +161,7 @@ function renderOverview(ns, theme, progress, modeState) {
 }
 
 function renderMainGrid(ns, theme, options, statuses, progress, modeState, network) {
-    const moneyRunning = isScriptRunning(ns, SCRIPTS.formulas);
+    const moneyRunning = isScriptRunningOnHome(ns, SCRIPTS.formulas);
     return (
         <div style={twoColumnGridStyle}>
             <div style={cardStyle(theme)}>
@@ -171,13 +170,13 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState, netwo
                     {renderBadge(theme, modeLabel(modeState.currentMode), "active")}
                 </div>
                 <div style={miniSectionTitle}>Managed Engines</div>
-                {renderEngineRow(theme, "Orchestrator", isScriptRunning(ns, SCRIPTS.orchestrator), "Controls mode switching")}
-                {renderEngineRow(theme, "Money", isScriptRunning(ns, SCRIPTS.formulas), statuses.formulas?.target ?? "formulas-batcher")}
-                {renderEngineRow(theme, "Startup", isScriptRunning(ns, SCRIPTS.startup), statuses.startup?.target ?? "startup")}
-                {renderEngineRow(theme, "XP", isScriptRunning(ns, SCRIPTS.xp), options.xpTarget || "auto target")}
-                {renderEngineRow(theme, "Rep", isScriptRunning(ns, SCRIPTS.share), "rep-share")}
-                {renderEngineRow(theme, "Stocks", isScriptRunning(ns, SCRIPTS.stock), stockEngineLabel(progress.stock, options.autoTrade))}
-                {renderEngineRow(theme, "Hacknet", isScriptRunning(ns, SCRIPTS.hacknet), statuses.hacknet?.action ?? "hacknet-manager")}
+                {renderEngineRow(theme, "Orchestrator", isScriptRunningOnHome(ns, SCRIPTS.orchestrator), "Controls mode switching")}
+                {renderEngineRow(theme, "Money", isScriptRunningOnHome(ns, SCRIPTS.formulas), statuses.formulas?.target ?? "formulas-batcher")}
+                {renderEngineRow(theme, "Startup", isScriptRunningOnHome(ns, SCRIPTS.startup), statuses.startup?.target ?? "startup")}
+                {renderEngineRow(theme, "XP", isScriptRunningOnHome(ns, SCRIPTS.xp), options.xpTarget || "auto target")}
+                {renderEngineRow(theme, "Rep", isScriptRunningOnHome(ns, SCRIPTS.share), "rep-share")}
+                {renderEngineRow(theme, "Stocks", isScriptRunningOnHome(ns, SCRIPTS.stock), stockEngineLabel(progress.stock, options.autoTrade))}
+                {renderEngineRow(theme, "Hacknet", isScriptRunningOnHome(ns, SCRIPTS.hacknet), statuses.hacknet?.action ?? "hacknet-manager")}
 
                 <div style={miniSectionTitle}>Actions</div>
                 <div style={buttonWrapStyle}>
@@ -216,6 +215,8 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState, netwo
                 {renderFlagRow(ns, theme, options, "formulasDebug", "Formulas Debug", "Show target rejection detail in money logs")}
                 {renderFlagRow(ns, theme, options, "shareHome", "Share Home", "Allow rep-share to consume spare home RAM")}
                 {renderFlagRow(ns, theme, options, "sharePurchased", "Share Bought", "Allow rep-share to use purchased servers")}
+                {renderFlagRow(ns, theme, options, "showScoreboard", "Target Scoreboard", "Render the ranked target table in the UI")}
+                {renderFlagRow(ns, theme, options, "showDiagnostics", "Target Diagnostics", "Render the batch diagnostics panel in the UI")}
                 {renderFlagRow(ns, theme, options, "helper", "Helper Text", "Keep extra explanations visible")}
             </div>
 
@@ -272,9 +273,16 @@ function renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install,
                 <div style={cardStyle(theme)}>
                     <div style={cardHeaderStyle}>
                         <div style={cardTitleStyle}>Target Scoreboard</div>
-                        {renderBadge(theme, `${topTargets.length} ranked`, "neutral")}
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            {renderBadge(theme, options.showScoreboard ? `${topTargets.length} ranked` : "hidden", "neutral")}
+                            <button style={smallButtonStyle(theme)} onClick={() => toggleOption(ns, options, "showScoreboard")}>
+                                {options.showScoreboard ? "Hide" : "Show"}
+                            </button>
+                        </div>
                     </div>
-                    {topTargets.length === 0
+                    {!options.showScoreboard ? (
+                        <div style={{ opacity: 0.76 }}>Enable Target Scoreboard when you want a ranked target snapshot. Hidden by default to keep the UI lighter.</div>
+                    ) : topTargets.length === 0
                         ? <div style={{ opacity: 0.8 }}>No valid ranked targets.</div>
                         : topTargets.map((row) => (
                             <div key={row.host} style={tableRowStyle(theme)}>
@@ -317,8 +325,17 @@ function renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install,
                 <div style={cardStyle(theme)}>
                     <div style={cardHeaderStyle}>
                         <div style={cardTitleStyle}>Target Diagnostics</div>
-                        {renderBadge(theme, diagnostics.state, diagnostics.state === "Batching" ? "active" : "neutral")}
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            {renderBadge(theme, options.showDiagnostics ? diagnostics.state : "hidden", diagnostics.state === "Batching" ? "active" : "neutral")}
+                            <button style={smallButtonStyle(theme)} onClick={() => toggleOption(ns, options, "showDiagnostics")}>
+                                {options.showDiagnostics ? "Hide" : "Show"}
+                            </button>
+                        </div>
                     </div>
+                    {!options.showDiagnostics ? (
+                        <div style={{ opacity: 0.76 }}>Enable Target Diagnostics only when you want live batch state and debug detail. Hidden by default to reduce UI overhead.</div>
+                    ) : (
+                        <>
                     <div style={compactGridStyle(2)}>
                         {renderStatTile(theme, "Current", diagnostics.currentTarget || "none")}
                         {renderStatTile(theme, "Top Candidate", diagnostics.topCandidate || "none")}
@@ -340,6 +357,8 @@ function renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install,
                         <div style={{ marginTop: 10, opacity: 0.75 }}>
                             {options.formulasDebug ? "No target debug lines yet." : "Enable Formulas Debug to show accept/reject reasoning here."}
                         </div>
+                    )}
+                        </>
                     )}
                 </div>
 
@@ -496,6 +515,15 @@ function getNetworkSummary(ns) {
     }
 
     return { totalWorkers, activeWorkers, totalUsableRam, freeRam, moneyRam, shareRam, otherRam };
+}
+
+function getCachedNetworkSummary(ns) {
+    const now = Date.now();
+    if (!cachedNetwork || now - cachedNetworkAt > NETWORK_CACHE_MS) {
+        cachedNetwork = getNetworkSummary(ns);
+        cachedNetworkAt = now;
+    }
+    return cachedNetwork;
 }
 
 function getTargetDiagnostics(progress, formulasStatus, topTargets) {
@@ -657,27 +685,23 @@ function yesNo(value) {
     return value ? "yes" : "no";
 }
 
-function isScriptRunning(ns, script) {
-    return ns.ps("home").some((proc) => matchesScript(proc.filename, script));
-}
-
 function setManualMode(ns, options, mode) {
     options.autoMode = false;
     options.selectedMode = mode;
     saveOptions(ns, options);
-    notify(ns, `MarvOS manual mode -> ${modeLabel(mode)}${isScriptRunning(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
+    notify(ns, `MarvOS manual mode -> ${modeLabel(mode)}${isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
     triggerRefresh(ns);
 }
 
 function toggleAutoMode(ns, options) {
     options.autoMode = !options.autoMode;
     saveOptions(ns, options);
-    notify(ns, `MarvOS auto mode ${options.autoMode ? "enabled" : "disabled"}${isScriptRunning(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
+    notify(ns, `MarvOS auto mode ${options.autoMode ? "enabled" : "disabled"}${isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
     triggerRefresh(ns);
 }
 
 function toggleAutomation(ns) {
-    if (isScriptRunning(ns, SCRIPTS.orchestrator)) {
+    if (isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) {
         let stopped = 0;
         for (const proc of ns.ps("home")) {
             if (matchesScript(proc.filename, SCRIPTS.orchestrator)) {
@@ -751,19 +775,13 @@ function openControlledLogs(ns) {
 }
 
 function stopManaged(ns) {
-    let stopped = 0;
-    for (const proc of ns.ps("home")) {
-        if (ENGINE_SCRIPTS.some((script) => matchesScript(proc.filename, script))) {
-            ns.kill(proc.pid);
-            stopped += 1;
-        }
-    }
+    const stopped = stopManagedRuntime(ns);
     notify(ns, stopped > 0 ? `Stopped ${stopped} engine script${stopped === 1 ? "" : "s"}` : "No engine scripts were running");
     triggerRefresh(ns);
 }
 
 function ensureOrchestrator(ns) {
-    if (isScriptRunning(ns, SCRIPTS.orchestrator)) return;
+    if (isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) return;
     if (!ns.fileExists(SCRIPTS.orchestrator, "home")) return;
     const pid = ns.exec(SCRIPTS.orchestrator, "home", 1);
     if (pid > 0) notify(ns, "Started /MarvOS/orchestrator.js");
@@ -829,7 +847,7 @@ function toggleOption(ns, options, key) {
     }
     options[key] = !options[key];
     saveOptions(ns, options);
-    if (key === "autoTrade" && options[key] && !isScriptRunning(ns, SCRIPTS.orchestrator)) {
+    if (key === "autoTrade" && options[key] && !isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) {
         notify(ns, `${optionLabel(key)} enabled (automation off; start automation to activate)`);
     } else {
         notify(ns, `${optionLabel(key)} ${options[key] ? "enabled" : "disabled"}`);
@@ -875,6 +893,8 @@ function optionLabel(key) {
         case "formulasDebug": return "Formulas Debug";
         case "shareHome": return "Share Home";
         case "sharePurchased": return "Share Bought";
+        case "showScoreboard": return "Target Scoreboard";
+        case "showDiagnostics": return "Target Diagnostics";
         case "helper": return "Helper Text";
         default: return key;
     }
@@ -892,7 +912,7 @@ async function waitForRefresh(ns) {
     ns.clearPort(REFRESH_PORT);
     await Promise.race([
         ns.nextPortWrite(REFRESH_PORT),
-        ns.asleep(3000),
+        ns.asleep(5000),
     ]);
 }
 
@@ -1030,6 +1050,14 @@ function secondaryButtonStyle(theme) {
         border: `1px solid rgba(0,255,65,0.45)`,
         padding: "7px 11px",
         cursor: "pointer",
+    };
+}
+
+function smallButtonStyle(theme) {
+    return {
+        ...secondaryButtonStyle(theme),
+        padding: "4px 8px",
+        fontSize: 11,
     };
 }
 
