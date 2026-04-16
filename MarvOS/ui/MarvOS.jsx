@@ -506,10 +506,13 @@ function getTargetDiagnostics(progress, formulasStatus, topTargets) {
 }
 
 function inferTargetState(formulasStatus) {
+    const batchType = String(formulasStatus?.batchPlan?.type ?? "").toLowerCase();
     const action = String(formulasStatus?.action ?? "").toLowerCase();
     if (!action) return "Idle";
     if (action.includes("prep")) return "Prepping";
-    if (action.includes("hwgw")) return "Batching";
+    if (action.includes("waiting for ram") || action.includes("countdown")) return "Waiting";
+    if (action.includes("hwgw") || action.includes("hgw") || action.includes("hybrid")) return "Batching";
+    if (batchType === "hwgw" || batchType === "hgw" || batchType === "hybrid") return "Batching";
     if (action.includes("waiting")) return "Waiting";
     return "Active";
 }
