@@ -1,11 +1,21 @@
 export const DEFAULT_BUNDLE_SOURCE = "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt";
 const MARVOS_SOURCE_PATH = "/MarvOS/data/source.txt";
 const TEMP_PATH = "/MarvOS/data/load-bundle.txt";
+const RESTART_SCRIPTS = [
+    "/MarvOS/ui/MarvOS.jsx",
+    "/MarvOSBeta/ui/MarvOSBeta.jsx",
+    "/MarvOS/orchestrator.js",
+    "/MarvOS/Loader.js",
+    "/MarvOSBeta/Loader.js",
+];
 
 /** @param {NS} ns */
 export async function main(ns) {
     const sourceArg = String(ns.args[0] ?? "").trim();
     const source = sourceArg || getBundleSource(ns);
+
+    stopRunningMarvOS(ns);
+    await ns.sleep(50);
 
     ns.rm(TEMP_PATH, "home");
     const ok = await ns.wget(source, TEMP_PATH, "home");
@@ -77,4 +87,16 @@ function extractContents(file) {
         }
     }
     return "";
+}
+
+function stopRunningMarvOS(ns) {
+    const processes = ns.ps("home");
+    for (const script of RESTART_SCRIPTS) {
+        const normalized = script.startsWith("/") ? script.slice(1) : script;
+        for (const proc of processes) {
+            if (proc.filename === script || proc.filename === normalized) {
+                ns.kill(proc.pid);
+            }
+        }
+    }
 }
