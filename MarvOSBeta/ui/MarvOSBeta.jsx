@@ -46,6 +46,10 @@ const DEFAULT_OPTIONS = {
 
 const MODES = ["startup", "money", "xp", "rep"];
 const DEFAULT_BUNDLE_SOURCE = "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt";
+const TARGET_CACHE_MS = 15_000;
+
+let cachedTargets = [];
+let cachedTargetsAt = 0;
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -53,7 +57,6 @@ export async function main(ns) {
     ns.ui.openTail();
     ns.ui.resizeTail(1260, 900);
     ns.ui.setTailTitle("MarvOS Beta");
-    ensureOrchestrator(ns);
 
     const React = getReactLib();
     if (!React) {
@@ -87,7 +90,7 @@ function BetaApp({ ns, React }) {
         const tick = async () => {
             if (cancelled) return;
             setSnapshot(buildSnapshot(ns));
-            if (!cancelled) timer = setTimeout(tick, 1500);
+            if (!cancelled) timer = setTimeout(tick, 3000);
         };
 
         tick();
@@ -147,6 +150,7 @@ function BetaApp({ ns, React }) {
 
             <div style={ribbonStyle}>
                 {renderRibbonChip(palette, `Target ${diagnostics.currentTarget || "none"}`, diagnostics.currentTarget ? "primary" : "neutral")}
+                {renderRibbonChip(palette, `Automation ${isScriptRunning(ns, SCRIPTS.orchestrator) ? "armed" : "off"}`, isScriptRunning(ns, SCRIPTS.orchestrator) ? "primary" : "neutral")}
                 {renderRibbonChip(palette, `Top ${diagnostics.topCandidate || "none"}`, diagnostics.topCandidate ? "primary" : "neutral")}
                 {renderRibbonChip(palette, `Buyer ${buyModeLabel(options.buyMode)}`, options.buyMode === "aggressive" ? "warn" : "primary")}
                 {renderRibbonChip(palette, `Stocks ${stockLabel(progress.stock)}`, progress.stock.autoTradeReady ? "primary" : "neutral")}
@@ -181,6 +185,12 @@ function BetaApp({ ns, React }) {
 
                         <div style={toggleRowStyle}>
                             <button
+                                style={toggleButtonStyle(palette, isScriptRunning(ns, SCRIPTS.orchestrator))}
+                                onClick={() => runAction(isScriptRunning(ns, SCRIPTS.orchestrator) ? "Automation stopped" : "Automation started", () => toggleAutomation(ns))}
+                            >
+                                {isScriptRunning(ns, SCRIPTS.orchestrator) ? "Stop Automation" : "Start Automation"}
+                            </button>
+                            <button
                                 style={toggleButtonStyle(palette, options.autoMode)}
                                 onClick={() => runAction(options.autoMode ? "Auto mode disabled" : "Auto mode enabled", () => toggleAutoMode(ns, options))}
                             >
@@ -206,6 +216,7 @@ function BetaApp({ ns, React }) {
                         <div style={buttonGridStyle}>
                             <button style={commandButtonStyle(palette)} onClick={() => runAction("Rooter launch requested", () => runRootScript(ns, options.rootScript))}>Run Rooter</button>
                             <button style={commandButtonStyle(palette)} onClick={() => runAction(`Buyer launch requested (${buyModeLabel(options.buyMode)})`, () => runBuyScript(ns, options))}>Run Buyer</button>
+                            <button style={commandButtonStyle(palette)} onClick={() => runAction("Stock trader launch requested", () => runStockTrader(ns, progress))}>Run Stocks</button>
                             <button style={commandButtonStyle(palette)} onClick={() => runAction("Backdoor chain requested", () => runOnce(ns, SCRIPTS.backdoor, []))}>Backdoor Next</button>
                             <button style={commandButtonStyle(palette)} onClick={() => runAction("OS load requested", () => runOnce(ns, SCRIPTS.load, []))}>Load OS</button>
                             <button style={commandButtonStyle(palette)} onClick={() => openControlledLogs(ns)}>Open Logs</button>
@@ -440,7 +451,7 @@ function buildSnapshot(ns) {
         stock: readStatus(ns, STATUS_NAMES.stock),
     };
     const progress = getProgressSnapshot(ns);
-    const targets = rankMoneyTargets(ns, { limit: 8 });
+    const targets = getCachedTopTargets(ns, 8);
     const modeState = deriveModeState(options, statuses.orchestrator, progress);
     const network = getNetworkSummary(ns);
     const diagnostics = getTargetDiagnostics(statuses.formulas, targets);
@@ -746,6 +757,15 @@ function stockFlagDetail(stock) {
     return "4S API active";
 }
 
+function getCachedTopTargets(ns, limit) {
+    const now = Date.now();
+    if (now - cachedTargetsAt > TARGET_CACHE_MS || cachedTargets.length === 0) {
+        cachedTargets = rankMoneyTargets(ns, { limit: Math.max(limit, 8) });
+        cachedTargetsAt = now;
+    }
+    return cachedTargets.slice(0, limit);
+}
+
 function modeLabel(mode) {
     switch (mode) {
         case "startup": return "Startup";
@@ -791,15 +811,26 @@ function setManualMode(ns, options, mode) {
     options.autoMode = false;
     options.selectedMode = mode;
     saveOptions(ns, options);
-    ensureOrchestrator(ns);
-    notify(ns, `MarvOS Beta manual mode -> ${modeLabel(mode)}`);
+    notify(ns, `MarvOS Beta manual mode -> ${modeLabel(mode)}${isScriptRunning(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
 }
 
 function toggleAutoMode(ns, options) {
     options.autoMode = !options.autoMode;
     saveOptions(ns, options);
-    if (options.autoMode) ensureOrchestrator(ns);
-    notify(ns, `MarvOS Beta auto mode ${options.autoMode ? "enabled" : "disabled"}`);
+    notify(ns, `MarvOS Beta auto mode ${options.autoMode ? "enabled" : "disabled"}${isScriptRunning(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
+}
+
+function toggleAutomation(ns) {
+    if (isScriptRunning(ns, SCRIPTS.orchestrator)) {
+        for (const proc of ns.ps("home")) {
+            if (matchesScript(proc.filename, SCRIPTS.orchestrator)) {
+                ns.kill(proc.pid);
+            }
+        }
+        notify(ns, "Stopped automation");
+    } else {
+        ensureOrchestrator(ns);
+    }
 }
 
 function runOnce(ns, script, args) {
@@ -826,6 +857,15 @@ function runBuyScript(ns, options) {
     }
     const pid = ns.exec(script, "home", 1, ...buildBuyArgs(options.buyMode));
     notify(ns, pid > 0 ? `Started ${script} (${buyModeLabel(options.buyMode)})` : `Failed to start ${script}`);
+}
+
+function runStockTrader(ns, progress) {
+    if (!progress.stock.autoTradeReady) {
+        notify(ns, stockFlagDetail(progress.stock));
+        return;
+    }
+    const pid = ns.exec(SCRIPTS.stock, "home", 1);
+    notify(ns, pid > 0 ? `Started ${SCRIPTS.stock}` : `Failed to start ${SCRIPTS.stock}`);
 }
 
 function openControlledLogs(ns) {
@@ -899,7 +939,11 @@ function toggleOption(ns, options, key) {
     }
     options[key] = !options[key];
     saveOptions(ns, options);
-    notify(ns, `${key} ${options[key] ? "enabled" : "disabled"}`);
+    if (key === "autoTrade" && options[key] && !isScriptRunning(ns, SCRIPTS.orchestrator)) {
+        notify(ns, `${key} enabled (automation off; start automation to activate)`);
+    } else {
+        notify(ns, `${key} ${options[key] ? "enabled" : "disabled"}`);
+    }
 }
 
 function toggleBuyMode(ns, options) {

@@ -42,6 +42,10 @@ const DEFAULT_OPTIONS = {
 
 const REFRESH_PORT = 20;
 const MODES = ["startup", "money", "xp", "rep"];
+const TARGET_CACHE_MS = 15_000;
+
+let cachedTargets = [];
+let cachedTargetsAt = 0;
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -49,7 +53,6 @@ export async function main(ns) {
     ns.ui.openTail();
     ns.ui.resizeTail(980, 760);
     ns.ui.setTailTitle("MarvOS");
-    ensureOrchestrator(ns);
 
     while (true) {
         const options = loadOptions(ns, DEFAULT_OPTIONS);
@@ -62,7 +65,7 @@ export async function main(ns) {
             stock: readStatus(ns, STATUS_NAMES.stock),
         };
         const progress = getProgressSnapshot(ns);
-        const topTargets = rankMoneyTargets(ns, { limit: 6 });
+        const topTargets = getCachedTopTargets(ns, 6);
         const modeState = deriveModeState(options, statuses.orchestrator, progress);
         const network = getNetworkSummary(ns);
         const diagnostics = getTargetDiagnostics(progress, statuses.formulas, topTargets);
@@ -88,6 +91,7 @@ function renderHeader(theme, modeState, diagnostics, options, progress) {
                 <div style={{ opacity: 0.8, marginTop: 4 }}>Progression-first control plane for this run.</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                     {renderBadge(theme, `Target ${diagnostics.currentTarget || "none"}`, diagnostics.currentTarget ? "active" : "neutral")}
+                    {renderBadge(theme, `Automation ${isScriptRunning(ns, SCRIPTS.orchestrator) ? "armed" : "off"}`, isScriptRunning(ns, SCRIPTS.orchestrator) ? "active" : "neutral")}
                     {renderBadge(theme, `Buyer ${buyModeLabel(options.buyMode)}`, options.buyMode === "aggressive" ? "off" : "active")}
                     {renderBadge(theme, `Stocks ${stockLabel(progress.stock)}`, progress.stock.autoTradeReady ? "active" : "neutral")}
                     {renderBadge(theme, `Share ${progress.stock ? (options.shareHome || options.sharePurchased ? "armed" : "off") : "off"}`, options.shareHome || options.sharePurchased ? "active" : "neutral")}
@@ -108,14 +112,18 @@ function renderModeBar(ns, theme, options, modeState) {
             <div style={cardHeaderStyle}>
                 <div style={cardTitleStyle}>Mode Bar</div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {renderBadge(theme, isScriptRunning(ns, SCRIPTS.orchestrator) ? "Automation Armed" : "Automation Off", isScriptRunning(ns, SCRIPTS.orchestrator) ? "active" : "off")}
                     {renderBadge(theme, options.autoMode ? "Auto On" : "Manual", options.autoMode ? "active" : "off")}
+                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleAutomation(ns)}>
+                        {isScriptRunning(ns, SCRIPTS.orchestrator) ? "Stop Automation" : "Start Automation"}
+                    </button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => toggleAutoMode(ns, options)}>
                         {options.autoMode ? "Turn Auto Off" : "Turn Auto On"}
                     </button>
                 </div>
             </div>
             <div style={{ opacity: 0.82, marginBottom: 10 }}>
-                Click a mode to force it manually. With auto on, MarvOS switches between Startup, XP, and Money based on progression. Rep mode is a manual push mode.
+                Opening MarvOS does not arm automation by itself. Start automation when you want it to drive the run. With auto on, MarvOS switches between Startup, XP, and Money based on progression. Rep mode is a manual push mode.
             </div>
             <div style={modeBarStyle}>
                 {MODES.map((mode) => (
@@ -176,6 +184,7 @@ function renderMainGrid(ns, theme, options, statuses, progress, modeState, netwo
                     <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.backdoor, [])}>Backdoor Next</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => runRootScript(ns, options.rootScript)}>Run Rooter</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => runBuyScript(ns, options)}>Run Buyer</button>
+                    <button style={secondaryButtonStyle(theme)} onClick={() => runStockTrader(ns, progress)}>Run Stocks</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.load, [])}>Load OS</button>
                     <button style={secondaryButtonStyle(theme)} onClick={() => openControlledLogs(ns)}>Open Logs</button>
                     <button style={dangerButtonStyle(theme)} onClick={() => stopManaged(ns)}>Stop Engines</button>
@@ -573,6 +582,15 @@ function milestoneLabel(progress, faction) {
     return "Pending";
 }
 
+function getCachedTopTargets(ns, limit) {
+    const now = Date.now();
+    if (now - cachedTargetsAt > TARGET_CACHE_MS || cachedTargets.length === 0) {
+        cachedTargets = rankMoneyTargets(ns, { limit: Math.max(limit, 8) });
+        cachedTargetsAt = now;
+    }
+    return cachedTargets.slice(0, limit);
+}
+
 function stockLabel(stock) {
     switch (stock.level) {
         case "4s": return "4S API";
@@ -647,16 +665,30 @@ function setManualMode(ns, options, mode) {
     options.autoMode = false;
     options.selectedMode = mode;
     saveOptions(ns, options);
-    ensureOrchestrator(ns);
-    notify(ns, `MarvOS manual mode -> ${modeLabel(mode)}`);
+    notify(ns, `MarvOS manual mode -> ${modeLabel(mode)}${isScriptRunning(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
     triggerRefresh(ns);
 }
 
 function toggleAutoMode(ns, options) {
     options.autoMode = !options.autoMode;
     saveOptions(ns, options);
-    if (options.autoMode) ensureOrchestrator(ns);
-    notify(ns, `MarvOS auto mode ${options.autoMode ? "enabled" : "disabled"}`);
+    notify(ns, `MarvOS auto mode ${options.autoMode ? "enabled" : "disabled"}${isScriptRunning(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
+    triggerRefresh(ns);
+}
+
+function toggleAutomation(ns) {
+    if (isScriptRunning(ns, SCRIPTS.orchestrator)) {
+        let stopped = 0;
+        for (const proc of ns.ps("home")) {
+            if (matchesScript(proc.filename, SCRIPTS.orchestrator)) {
+                ns.kill(proc.pid);
+                stopped += 1;
+            }
+        }
+        notify(ns, stopped > 0 ? "Stopped automation" : "Automation was already off");
+    } else {
+        ensureOrchestrator(ns);
+    }
     triggerRefresh(ns);
 }
 
@@ -694,6 +726,16 @@ function runBuyScript(ns, options) {
     }
     const pid = ns.exec(script, "home", 1, ...buildBuyArgs(options.buyMode));
     notify(ns, pid > 0 ? `Started ${script}` : `Failed to start ${script}`);
+    triggerRefresh(ns);
+}
+
+function runStockTrader(ns, progress) {
+    if (!progress.stock.autoTradeReady) {
+        notify(ns, stockFlagDetail(progress.stock));
+        return;
+    }
+    const pid = ns.exec(SCRIPTS.stock, "home", 1);
+    notify(ns, pid > 0 ? `Started ${SCRIPTS.stock}` : `Failed to start ${SCRIPTS.stock}`);
     triggerRefresh(ns);
 }
 
@@ -787,7 +829,11 @@ function toggleOption(ns, options, key) {
     }
     options[key] = !options[key];
     saveOptions(ns, options);
-    notify(ns, `${optionLabel(key)} ${options[key] ? "enabled" : "disabled"}`);
+    if (key === "autoTrade" && options[key] && !isScriptRunning(ns, SCRIPTS.orchestrator)) {
+        notify(ns, `${optionLabel(key)} enabled (automation off; start automation to activate)`);
+    } else {
+        notify(ns, `${optionLabel(key)} ${options[key] ? "enabled" : "disabled"}`);
+    }
     triggerRefresh(ns);
 }
 

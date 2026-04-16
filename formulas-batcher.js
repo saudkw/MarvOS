@@ -449,8 +449,11 @@ function dispatchThreads(ns, workers, script, target, delay, threads, requireChu
     let remaining = Math.max(0, Math.floor(threads));
     let lastPid = 0;
     const scriptRam = ns.getScriptRam(script, "home");
+    const availableThreadCounts = workers.map((worker) => Math.floor(worker.freeRam / scriptRam));
+    const largestAvailable = availableThreadCounts.length > 0 ? Math.max(...availableThreadCounts) : 0;
+    const allowChunk = requireChunk && remaining <= Math.min(largestAvailable, 96);
 
-    if (requireChunk) {
+    if (allowChunk) {
         for (const worker of workers) {
             const availableThreads = Math.floor(worker.freeRam / scriptRam);
             if (availableThreads < remaining) continue;
@@ -462,6 +465,31 @@ function dispatchThreads(ns, workers, script, target, delay, threads, requireChu
             }
         }
         return dispatchThreads(ns, workers, script, target, delay, remaining, false, logging, tag);
+    }
+
+    const eligible = workers.filter((worker) => Math.floor(worker.freeRam / scriptRam) > 0);
+    for (let i = 0; i < eligible.length && remaining > 0; i += 1) {
+        const worker = eligible[i];
+        const pid = ns.exec(script, worker.host, 1, target, Math.max(0, delay), tag || `${Date.now()}:spread:${i}`);
+        if (pid === 0) continue;
+        worker.freeRam -= scriptRam;
+        remaining -= 1;
+        lastPid = pid;
+    }
+
+    const eligibleAfterSpread = workers.filter((worker) => Math.floor(worker.freeRam / scriptRam) > 0);
+    const fairShare = eligibleAfterSpread.length > 0 ? Math.max(1, Math.ceil(remaining / eligibleAfterSpread.length)) : 0;
+    for (const worker of eligibleAfterSpread) {
+        if (remaining <= 0) break;
+        const availableThreads = Math.floor(worker.freeRam / scriptRam);
+        if (availableThreads <= 0) continue;
+        const runThreads = Math.min(remaining, availableThreads, fairShare);
+        if (runThreads <= 0) continue;
+        const pid = ns.exec(script, worker.host, runThreads, target, Math.max(0, delay), tag || `${Date.now()}:fair:${runThreads}`);
+        if (pid === 0) continue;
+        worker.freeRam -= runThreads * scriptRam;
+        remaining -= runThreads;
+        lastPid = pid;
     }
 
     const toRemove = new Set();
@@ -541,22 +569,8 @@ function getWorkerPoolSorted(ns, config) {
         useHacknet: config.useHacknet,
     }).workers;
 
-    workers.sort((a, b) => {
-        const rankA = workerRank(a.type);
-        const rankB = workerRank(b.type);
-        if (rankA !== rankB) return rankA - rankB;
-        return a.freeRam - b.freeRam;
-    });
+    workers.sort((a, b) => a.freeRam - b.freeRam);
     return workers;
-}
-
-function workerRank(type) {
-    switch (type) {
-        case "purchased": return 0;
-        case "rooted": return 1;
-        case "home": return 2;
-        default: return 3;
-    }
 }
 
 async function syncWorkerFiles(ns, config) {
