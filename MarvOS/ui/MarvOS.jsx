@@ -73,7 +73,7 @@ export async function main(ns) {
         const theme = ns.ui.getTheme();
 
         ns.clearLog();
-        ns.printRaw(renderHeader(theme, modeState, diagnostics, options, progress));
+        ns.printRaw(renderHeader(ns, theme, modeState, diagnostics, options, progress));
         ns.printRaw(renderModeBar(ns, theme, options, modeState));
         ns.printRaw(renderOverview(ns, theme, progress, modeState));
         ns.printRaw(renderMainGrid(ns, theme, options, statuses, progress, modeState, network));
@@ -83,7 +83,7 @@ export async function main(ns) {
     }
 }
 
-function renderHeader(theme, modeState, diagnostics, options, progress) {
+function renderHeader(ns, theme, modeState, diagnostics, options, progress) {
     return (
         <div style={heroStyle(theme)}>
             <div>
