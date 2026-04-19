@@ -15,6 +15,8 @@ const SERVER_RUNNER = "/MarvOS/extras/serverRun.js";
 /** @param {NS} ns */
 export async function main(ns) {
     const flags = ns.flags([
+        ["debug-targets", false],
+        ["debug-limit", 5],
         ["home-reserve", 32],
         ["use-hacknet", false],
         ["logging", false],
@@ -44,6 +46,8 @@ export async function main(ns) {
     ns.atExit(() => clearStatus(ns, STATUS_NAMES.formulas));
 
     const config = {
+        debugTargets: Boolean(flags["debug-targets"]),
+        debugLimit: Math.max(1, Math.floor(Number(flags["debug-limit"]) || 5)),
         homeReserve: Math.max(0, Number(flags["home-reserve"]) || 32),
         useHacknet: Boolean(flags["use-hacknet"]),
         logging: Boolean(flags.logging),
@@ -218,6 +222,7 @@ export async function main(ns) {
             secDiff: live.secDiff,
             freeRam: summary.totalFreeRam,
             usableRam: summary.totalUsableRam,
+            debug: buildDebugLines(config, target, tunedBatchInfo, prep, threadsMax, threadsLeft, batchesTotal),
             batchPlan: {
                 type: tunedBatchInfo.Type,
                 hackThreads: tunedBatchInfo.H1,
@@ -244,6 +249,7 @@ export async function main(ns) {
                     secDiff: latest.secDiff,
                     freeRam: getThreadSummary(ns, config).totalFreeRam,
                     usableRam: summary.totalUsableRam,
+                    debug: buildDebugLines(config, target, tunedBatchInfo, prep, threadsMax, threadsLeft, batchesTotal),
                 }, () => lastStatusAt, (value) => { lastStatusAt = value; });
                 await ns.sleep(100);
             }
@@ -435,4 +441,25 @@ function emptyBatchInfo() {
         Chance: 0,
         Threads: 0,
     };
+}
+
+function buildDebugLines(config, target, batchInfo, prep, threadsMax, threadsLeft, batchesTotal) {
+    if (!config.debugTargets) return [];
+    const lines = [
+        `target=${target}`,
+        `type=${batchInfo.Type} H=${batchInfo.H1} W1=${batchInfo.W1} G=${batchInfo.G1} W2=${batchInfo.W2}`,
+        `prep=W${prep.W1}/G${prep.G1}/W${prep.W2}/H${prep.H1}/W${prep.W3}/G${prep.G2}/W${prep.W4}`,
+        `threads max=${threadsMax} left=${threadsLeft} batches=${batchesTotal}`,
+        `take=${formatCompactNumber(batchInfo.Take)} chance=${((batchInfo.Chance || 0) * 100).toFixed(1)}%`,
+    ];
+    return lines.slice(0, config.debugLimit);
+}
+
+function formatCompactNumber(value) {
+    if (value >= 1e15) return `${(value / 1e15).toFixed(2)}q`;
+    if (value >= 1e12) return `${(value / 1e12).toFixed(2)}t`;
+    if (value >= 1e9) return `${(value / 1e9).toFixed(2)}b`;
+    if (value >= 1e6) return `${(value / 1e6).toFixed(2)}m`;
+    if (value >= 1e3) return `${(value / 1e3).toFixed(2)}k`;
+    return `${Math.round(value)}`;
 }
