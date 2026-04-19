@@ -22,6 +22,7 @@ FILES = [
     "MarvOS/lib/options.js",
     "MarvOS/lib/runtime.js",
     "MarvOS/lib/money-core.js",
+    "MarvOS/lib/sphyx-money.js",
     "MarvOS/lib/progression.js",
     "MarvOS/lib/scoring.js",
     "MarvOS/extras/serverRun.js",
