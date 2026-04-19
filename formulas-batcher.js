@@ -133,7 +133,11 @@ export async function main(ns) {
 
         let xpResult = null;
         if (config.xpOverflow && dispatch.remainingThreads > 0) {
-            xpResult = runXpOverflow(ns, workers, dispatch.remainingThreads, config);
+            const freshWorkers = getWorkerPool(ns, {
+                homeReserve: config.homeReserve,
+                useHacknet: config.useHacknet,
+            });
+            xpResult = runXpOverflow(ns, freshWorkers, dispatch.remainingThreads, config);
         }
 
         const finalPid = xpResult?.lastPid || dispatch.lastPid;
@@ -274,7 +278,7 @@ function buildExecutionPlan(ns, target, live, batchInfo, totalThreads, workerCou
 
     const batchThreads = Math.max(0, batchInfo.Threads || (batchInfo.H1 + batchInfo.W1 + batchInfo.G1 + batchInfo.W2));
     const rawBatchesTotal = batchThreads > 0 ? Math.floor(threadsLeft / batchThreads) : 0;
-    const batchesTotal = Math.max(0, Math.min(rawBatchesTotal, getBatchCap(workerCount, rawBatchesTotal)));
+    const batchesTotal = Math.max(0, rawBatchesTotal);
     const remainingThreads = Math.max(0, threadsLeft - batchesTotal * batchThreads);
 
     return {
@@ -497,13 +501,6 @@ function getTotalFreeRam(workers) {
 
 function getTotalUsableRam(workers) {
     return workers.reduce((sum, worker) => sum + worker.maxUsableRam, 0);
-}
-
-function getBatchCap(workerCount, rawBatches) {
-    if (rawBatches <= 0) return 0;
-    const floor = Math.max(24, workerCount * 3);
-    const ceiling = Math.max(floor, Math.min(512, workerCount * 24));
-    return Math.min(rawBatches, ceiling);
 }
 
 function summarizeAction(plan, dispatch, xpResult) {

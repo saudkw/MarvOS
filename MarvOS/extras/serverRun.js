@@ -117,7 +117,7 @@ function dispatchWork(ns, workers, script, target, delay, threads, requireChunk,
 
     if (remaining <= 0) return { lastPid: 0, chunking };
 
-    if (chunking && remaining <= 8) {
+    if (chunking) {
         for (const worker of orderedWorkers) {
             const availableThreads = Math.floor(worker.freeRam / scriptRam);
             if (availableThreads < remaining) continue;
