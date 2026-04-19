@@ -64,13 +64,12 @@ export async function main(ns) {
     let batchInfo = null;
     let lastHackThreads = 1;
 
-    await syncWorkerFiles(ns, config);
-    killManagedWorkers(ns, config);
+    await syncWorkerFiles(ns, config, true);
     lastSyncAt = Date.now();
 
     while (true) {
-        if (Date.now() - lastSyncAt > 60_000) {
-            await syncWorkerFiles(ns, config);
+        if (Date.now() - lastSyncAt > 300_000) {
+            await syncWorkerFiles(ns, config, false);
             lastSyncAt = Date.now();
         }
 
@@ -480,28 +479,18 @@ function fitHackWeakenPair(hackThreadsWanted, threadsAvailable, weakenStrength) 
     return { hack: hackThreads, weaken: weakenThreads };
 }
 
-async function syncWorkerFiles(ns, config) {
+async function syncWorkerFiles(ns, config, aggressive) {
     const workers = getWorkerPool(ns, {
         homeReserve: config.homeReserve,
         useHacknet: config.useHacknet,
     });
     for (const worker of workers) {
         if (worker.host !== "home") {
-            await ns.scp(WORKER_FILES, worker.host, "home");
+            const missing = WORKER_FILES.some((file) => !ns.fileExists(file, worker.host));
+            if (aggressive || missing) {
+                await ns.scp(WORKER_FILES, worker.host, "home");
+            }
         }
-    }
-}
-
-function killManagedWorkers(ns, config) {
-    const workers = getWorkerPool(ns, {
-        homeReserve: config.homeReserve,
-        useHacknet: config.useHacknet,
-    });
-    for (const worker of workers) {
-        for (const file of WORKER_FILES) {
-            ns.scriptKill(file, worker.host);
-        }
-        ns.scriptKill("share-worker.js", worker.host);
     }
 }
 

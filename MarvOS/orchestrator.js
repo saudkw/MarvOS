@@ -1,6 +1,7 @@
 import { loadOptions } from "/MarvOS/lib/options.js";
 import { getProgressSnapshot } from "/MarvOS/lib/progression.js";
 import { clearStatus, STATUS_NAMES, writeStatus } from "/MarvOS/lib/status.js";
+import { discoverHosts } from "/MarvOS/lib/runtime.js";
 
 const SCRIPTS = {
     startup: "/startup.js",
@@ -44,9 +45,14 @@ export async function main(ns) {
         maybeBuyTor(ns, options);
         const progress = getProgressSnapshot(ns);
         const decision = resolveMode(ns, options, progress);
-        cleanupBeforeMode(ns, options, decision.mode);
+        const modeChanged = decision.mode !== lastMode;
+        if (modeChanged) {
+            cleanupBeforeMode(ns, options, lastMode, decision.mode);
+        } else {
+            cleanupDuplicateHomeProcesses(ns, normalizeScriptPath(options.buyScript));
+        }
 
-        if (decision.mode !== lastMode) {
+        if (modeChanged) {
             ns.tprint(`MarvOS MODE -> ${decision.mode.toUpperCase()} | ${decision.reason}`);
             lastMode = decision.mode;
         }
@@ -283,9 +289,9 @@ function matchesScript(actual, expected) {
     return actual === normalized || actual === normalized.slice(1);
 }
 
-function cleanupBeforeMode(ns, options, mode) {
+function cleanupBeforeMode(ns, options, previousMode, mode) {
     cleanupDuplicateHomeProcesses(ns, normalizeScriptPath(options.buyScript));
-    if (mode !== "rep") {
+    if (previousMode === "rep" && mode !== "rep") {
         killShareWorkers(ns);
     }
 }
@@ -304,25 +310,4 @@ function killShareWorkers(ns) {
     for (const host of discoverHosts(ns)) {
         ns.scriptKill(SHARE_WORKER, host);
     }
-}
-
-function discoverHosts(ns) {
-    const seen = new Set(["home"]);
-    const queue = ["home"];
-
-    while (queue.length > 0) {
-        const host = queue.shift();
-        for (const next of ns.scan(host)) {
-            if (!seen.has(next)) {
-                seen.add(next);
-                queue.push(next);
-            }
-        }
-    }
-
-    for (const host of ns.getPurchasedServers()) {
-        seen.add(host);
-    }
-
-    return seen;
 }
