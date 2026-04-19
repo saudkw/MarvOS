@@ -59,7 +59,11 @@ export function getWorkerPool(ns, options = {}) {
         });
     }
 
-    workers.sort((a, b) => a.freeRam - b.freeRam);
+    workers.sort((a, b) => {
+        const typeOrder = rankWorkerType(a.type) - rankWorkerType(b.type);
+        if (typeOrder !== 0) return typeOrder;
+        return a.freeRam - b.freeRam;
+    });
     return workers;
 }
 
@@ -423,4 +427,10 @@ function printProfit(timeMs, take, batches, threads, chance) {
         return 0;
     }
     return ((take / seconds) * batches / threads) * chance;
+}
+
+function rankWorkerType(type) {
+    if (type === "purchased") return 0;
+    if (type === "rooted") return 1;
+    return 2;
 }
