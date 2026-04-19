@@ -6,7 +6,6 @@ export async function main(ns) {
     if (!target) return;
 
     const delay = Number.isFinite(delayRaw) && delayRaw > 0 ? Math.floor(delayRaw) : 0;
-    if (delay > 0) await ns.sleep(delay);
-
-    await ns.grow(target);
+    ns.disableLog("ALL");
+    await ns.grow(target, { additionalMsec: delay });
 }
