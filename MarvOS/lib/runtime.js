@@ -7,6 +7,7 @@ const ENGINE_SCRIPTS = [
     "/rep-share.js",
     "/stock-trader.js",
     "/buyservers.js",
+    "/MarvOS/extras/serverRun.js",
 ];
 
 const UI_SCRIPTS = [

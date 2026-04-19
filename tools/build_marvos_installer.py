@@ -24,6 +24,7 @@ FILES = [
     "MarvOS/lib/money-core.js",
     "MarvOS/lib/progression.js",
     "MarvOS/lib/scoring.js",
+    "MarvOS/extras/serverRun.js",
     "formulas-batcher.js",
     "startup.js",
     "xp-grind.js",

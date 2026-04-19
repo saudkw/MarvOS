@@ -11,6 +11,7 @@ import {
 const WORKER_FILES = ["hack.js", "grow.js", "weaken.js"];
 const THREAD_RAM = 1.75;
 const CONTROLLER_NAME = "formulas-batcher";
+const SERVER_RUNNER = "/MarvOS/extras/serverRun.js";
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -61,6 +62,8 @@ export async function main(ns) {
     let lastRetargetAt = 0;
     let lastStatusAt = 0;
     let lastSyncAt = 0;
+    let cachedRanking = [];
+    let cachedRankingAt = 0;
     let batchInfo = null;
     let lastHackThreads = 1;
 
@@ -73,11 +76,15 @@ export async function main(ns) {
             lastSyncAt = Date.now();
         }
 
-        const ranking = rankMoneyTargets(ns, {
-            limit: Math.max(10, config.debugLimit + 2),
-            minChance: config.minChance,
-            hackGate: 1.0,
-        });
+        if (!currentTarget || Date.now() - cachedRankingAt > config.targetRefreshMs) {
+            cachedRanking = rankMoneyTargets(ns, {
+                limit: Math.max(10, config.debugLimit + 2),
+                minChance: config.minChance,
+                hackGate: 1.0,
+            });
+            cachedRankingAt = Date.now();
+        }
+        const ranking = cachedRanking;
 
         const choice = chooseTarget(ranking, currentTarget, currentScore, lastRetargetAt, config);
         if (choice.switched) {
@@ -121,8 +128,8 @@ export async function main(ns) {
         }
 
         const tunedBatchInfo = tuneBatchInfo(batchInfo, config, ns);
-        const plan = buildExecutionPlan(ns, currentTarget, live, tunedBatchInfo, totalThreads);
-        const dispatch = await executePlan(ns, currentTarget, workers, plan, config);
+        const plan = buildExecutionPlan(ns, currentTarget, live, tunedBatchInfo, totalThreads, workers.length);
+        const dispatch = await executePlan(ns, currentTarget, plan, config);
 
         let xpResult = null;
         if (config.xpOverflow && dispatch.remainingThreads > 0) {
@@ -183,7 +190,7 @@ export async function main(ns) {
                 },
                 debug: buildDebugLines(ranking, config),
             }, () => lastStatusAt, (value) => { lastStatusAt = value; });
-            await ns.sleep(200);
+            await ns.sleep(500);
         }
 
         if (dispatch.recalc || dispatch.batchesRun <= 1) {
@@ -219,7 +226,7 @@ function tuneBatchInfo(batchInfo, config, ns) {
     };
 }
 
-function buildExecutionPlan(ns, target, live, batchInfo, totalThreads) {
+function buildExecutionPlan(ns, target, live, batchInfo, totalThreads, workerCount) {
     const server = ns.getServer(target);
     const player = ns.getPlayer();
     const weakenStrength = ns.weakenAnalyze(1);
@@ -264,7 +271,8 @@ function buildExecutionPlan(ns, target, live, batchInfo, totalThreads) {
     }
 
     const batchThreads = Math.max(0, batchInfo.Threads || (batchInfo.H1 + batchInfo.W1 + batchInfo.G1 + batchInfo.W2));
-    const batchesTotal = batchThreads > 0 ? Math.floor(threadsLeft / batchThreads) : 0;
+    const rawBatchesTotal = batchThreads > 0 ? Math.floor(threadsLeft / batchThreads) : 0;
+    const batchesTotal = Math.max(0, Math.min(rawBatchesTotal, getBatchCap(workerCount, rawBatchesTotal)));
     const remainingThreads = Math.max(0, threadsLeft - batchesTotal * batchThreads);
 
     return {
@@ -277,94 +285,71 @@ function buildExecutionPlan(ns, target, live, batchInfo, totalThreads) {
     };
 }
 
-async function executePlan(ns, target, workers, plan, config) {
-    const hackTime = ns.getHackTime(target);
-    const growTime = ns.getGrowTime(target);
-    const weakenTime = ns.getWeakenTime(target);
-    const startedAt = Date.now();
-    const hasPrepWeakens = plan.prep.W1 + plan.prep.W2 + plan.prep.W3 + plan.prep.W4 > 0;
-    const waitTime = hasPrepWeakens ? weakenTime : (plan.prep.G1 + plan.prep.G2 > 0 ? growTime : weakenTime);
-    let lastPid = 0;
-    let chunking = true;
-
-    if (plan.prep.W1) {
-        const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.prep.W1, false, `${CONTROLLER_NAME}:prep:w1`, config.logging);
-        lastPid = result.lastPid || lastPid;
-    }
-    if (plan.prep.G1) {
-        const result = dispatchWork(ns, workers, "grow.js", target, waitTime - growTime, plan.prep.G1, chunking, `${CONTROLLER_NAME}:prep:g1`, config.logging);
-        chunking = result.chunking;
-        lastPid = result.lastPid || lastPid;
-    }
-    if (plan.prep.W2) {
-        const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.prep.W2, false, `${CONTROLLER_NAME}:prep:w2`, config.logging);
-        lastPid = result.lastPid || lastPid;
-    }
-    if (plan.prep.H1) {
-        const result = dispatchWork(ns, workers, "hack.js", target, waitTime - hackTime, plan.prep.H1, chunking, `${CONTROLLER_NAME}:prep:h1`, config.logging);
-        chunking = result.chunking;
-        lastPid = result.lastPid || lastPid;
-    }
-    if (plan.prep.W3) {
-        const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.prep.W3, false, `${CONTROLLER_NAME}:prep:w3`, config.logging);
-        lastPid = result.lastPid || lastPid;
-    }
-    if (plan.prep.G2) {
-        const result = dispatchWork(ns, workers, "grow.js", target, waitTime - growTime, plan.prep.G2, chunking, `${CONTROLLER_NAME}:prep:g2`, config.logging);
-        chunking = result.chunking;
-        lastPid = result.lastPid || lastPid;
-    }
-    if (plan.prep.W4) {
-        const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.prep.W4, false, `${CONTROLLER_NAME}:prep:w4`, config.logging);
-        lastPid = result.lastPid || lastPid;
+async function executePlan(ns, target, plan, config) {
+    if (!ns.fileExists(SERVER_RUNNER, "home")) {
+        if (config.logging) ns.tprint(`Missing ${SERVER_RUNNER}`);
+        return {
+            lastPid: 0,
+            startedAt: Date.now(),
+            waitTime: 0,
+            weakenTime: ns.getWeakenTime(target),
+            recalc: true,
+            batchesRun: 0,
+            batching: false,
+            remainingThreads: 0,
+        };
     }
 
-    let batchesRun = 0;
-    let recalc = false;
-    const deadline = performance.now() + weakenTime;
-    let sliceStart = performance.now();
+    const resultFile = `marvos-serverrun-${Date.now()}-${Math.floor(Math.random() * 1e6)}.txt`;
+    const pid = ns.exec(
+        SERVER_RUNNER,
+        "home",
+        1,
+        target,
+        config.homeReserve,
+        config.useHacknet,
+        config.logging ? 1 : 0,
+        JSON.stringify(plan),
+        resultFile,
+    );
 
-    for (let i = 0; i < plan.batchesTotal; i += 1) {
-        if (performance.now() >= deadline) {
-            recalc = true;
-            break;
-        }
-        batchesRun += 1;
-
-        if (plan.batchInfo.H1) {
-            const result = dispatchWork(ns, workers, "hack.js", target, weakenTime - hackTime, plan.batchInfo.H1, chunking, `${CONTROLLER_NAME}:${Date.now()}:${i}:h`, config.logging);
-            chunking = result.chunking;
-            lastPid = result.lastPid || lastPid;
-        }
-        if (plan.batchInfo.W1) {
-            const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.batchInfo.W1, false, `${CONTROLLER_NAME}:${Date.now()}:${i}:w1`, config.logging);
-            lastPid = result.lastPid || lastPid;
-        }
-        if (plan.batchInfo.G1) {
-            const result = dispatchWork(ns, workers, "grow.js", target, weakenTime - growTime, plan.batchInfo.G1, chunking, `${CONTROLLER_NAME}:${Date.now()}:${i}:g`, config.logging);
-            chunking = result.chunking;
-            lastPid = result.lastPid || lastPid;
-        }
-        if (plan.batchInfo.W2) {
-            const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.batchInfo.W2, false, `${CONTROLLER_NAME}:${Date.now()}:${i}:w2`, config.logging);
-            lastPid = result.lastPid || lastPid;
-        }
-
-        if (performance.now() - sliceStart >= 150) {
-            sliceStart = performance.now();
-            await ns.sleep(0);
-        }
+    if (pid === 0) {
+        if (config.logging) ns.tprint(`Failed to start ${SERVER_RUNNER}`);
+        return {
+            lastPid: 0,
+            startedAt: Date.now(),
+            waitTime: 0,
+            weakenTime: ns.getWeakenTime(target),
+            recalc: true,
+            batchesRun: 0,
+            batching: false,
+            remainingThreads: 0,
+        };
     }
 
-    return {
-        lastPid,
-        startedAt,
-        waitTime: Math.max(waitTime, weakenTime),
-        weakenTime,
-        recalc,
-        batchesRun,
-        batching: chunking,
-        remainingThreads: Math.max(0, getTotalThreads(workers)),
+    while (ns.isRunning(pid)) {
+        await ns.sleep(50);
+    }
+
+    let record = null;
+    try {
+        const raw = ns.read(resultFile);
+        if (raw) record = JSON.parse(raw);
+    } catch {
+        record = null;
+    } finally {
+        if (ns.fileExists(resultFile, "home")) ns.rm(resultFile, "home");
+    }
+
+    return record ?? {
+        lastPid: 0,
+        startedAt: Date.now(),
+        waitTime: 0,
+        weakenTime: ns.getWeakenTime(target),
+        recalc: true,
+        batchesRun: 0,
+        batching: false,
+        remainingThreads: 0,
     };
 }
 
@@ -510,6 +495,13 @@ function getTotalFreeRam(workers) {
 
 function getTotalUsableRam(workers) {
     return workers.reduce((sum, worker) => sum + worker.maxUsableRam, 0);
+}
+
+function getBatchCap(workerCount, rawBatches) {
+    if (rawBatches <= 0) return 0;
+    const floor = Math.max(24, workerCount * 3);
+    const ceiling = Math.max(floor, Math.min(160, workerCount * 8));
+    return Math.min(rawBatches, ceiling);
 }
 
 function summarizeAction(plan, dispatch, xpResult) {
