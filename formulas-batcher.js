@@ -500,7 +500,7 @@ function getTotalUsableRam(workers) {
 function getBatchCap(workerCount, rawBatches) {
     if (rawBatches <= 0) return 0;
     const floor = Math.max(24, workerCount * 3);
-    const ceiling = Math.max(floor, Math.min(160, workerCount * 8));
+    const ceiling = Math.max(floor, Math.min(512, workerCount * 24));
     return Math.min(rawBatches, ceiling);
 }
 
