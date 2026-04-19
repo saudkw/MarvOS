@@ -225,9 +225,7 @@ function buildStartupArgs(options) {
 }
 
 function buildMoneyArgs(options) {
-    const args = ["--home-reserve", String(options.homeReserve)];
-    if (options.formulasDebug) args.push("--debug-targets");
-    return args;
+    return ["--home-reserve", String(options.homeReserve)];
 }
 
 function buildXpArgs(options) {
