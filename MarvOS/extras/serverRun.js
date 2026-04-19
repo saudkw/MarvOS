@@ -132,11 +132,21 @@ function dispatchWork(ns, workers, script, target, delay, threads, requireChunk,
 
     const eligibleWorkers = orderedWorkers.filter((worker) => Math.floor(worker.freeRam / scriptRam) > 0);
     if (eligibleWorkers.length > 1 && remaining > 1) {
-        const share = Math.max(1, Math.ceil(remaining / eligibleWorkers.length));
+        const totalAvailableThreads = eligibleWorkers.reduce(
+            (sum, worker) => sum + Math.floor(worker.freeRam / scriptRam),
+            0,
+        );
         for (const worker of eligibleWorkers) {
             const availableThreads = Math.floor(worker.freeRam / scriptRam);
             if (availableThreads <= 0 || remaining <= 0) continue;
-            const runThreads = Math.min(remaining, availableThreads, share);
+            const proportionalShare = totalAvailableThreads > 0
+                ? Math.floor((availableThreads / totalAvailableThreads) * threads)
+                : 0;
+            const runThreads = Math.min(
+                remaining,
+                availableThreads,
+                Math.max(1, proportionalShare),
+            );
             if (runThreads <= 0) continue;
             const pid = ns.exec(script, worker.host, runThreads, target, Math.max(0, delay), `${tag}:spread:${runThreads}`);
             if (pid === 0) {
@@ -151,7 +161,8 @@ function dispatchWork(ns, workers, script, target, delay, threads, requireChunk,
 
     while (remaining > 0) {
         let progress = false;
-        for (const worker of orderedWorkers) {
+        const fillWorkers = [...orderedWorkers].sort((a, b) => b.freeRam - a.freeRam);
+        for (const worker of fillWorkers) {
             const availableThreads = Math.floor(worker.freeRam / scriptRam);
             if (availableThreads <= 0) continue;
             const runThreads = Math.min(remaining, availableThreads);
