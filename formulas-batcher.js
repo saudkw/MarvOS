@@ -122,7 +122,7 @@ export async function main(ns) {
 
         const tunedBatchInfo = tuneBatchInfo(batchInfo, config, ns);
         const plan = buildExecutionPlan(ns, currentTarget, live, tunedBatchInfo, totalThreads);
-        const dispatch = executePlan(ns, currentTarget, workers, plan, config);
+        const dispatch = await executePlan(ns, currentTarget, workers, plan, config);
 
         let xpResult = null;
         if (config.xpOverflow && dispatch.remainingThreads > 0) {
@@ -277,7 +277,7 @@ function buildExecutionPlan(ns, target, live, batchInfo, totalThreads) {
     };
 }
 
-function executePlan(ns, target, workers, plan, config) {
+async function executePlan(ns, target, workers, plan, config) {
     const hackTime = ns.getHackTime(target);
     const growTime = ns.getGrowTime(target);
     const weakenTime = ns.getWeakenTime(target);
@@ -322,6 +322,7 @@ function executePlan(ns, target, workers, plan, config) {
     let batchesRun = 0;
     let recalc = false;
     const deadline = performance.now() + weakenTime;
+    let sliceStart = performance.now();
 
     for (let i = 0; i < plan.batchesTotal; i += 1) {
         if (performance.now() >= deadline) {
@@ -347,6 +348,11 @@ function executePlan(ns, target, workers, plan, config) {
         if (plan.batchInfo.W2) {
             const result = dispatchWork(ns, workers, "weaken.js", target, 0, plan.batchInfo.W2, false, `${CONTROLLER_NAME}:${Date.now()}:${i}:w2`, config.logging);
             lastPid = result.lastPid || lastPid;
+        }
+
+        if (performance.now() - sliceStart >= 150) {
+            sliceStart = performance.now();
+            await ns.sleep(0);
         }
     }
 
