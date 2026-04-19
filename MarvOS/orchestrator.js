@@ -22,7 +22,7 @@ const DEFAULT_OPTIONS = {
     sharePurchased: false,
     shareReserve: 32,
     helper: true,
-    autoMode: true,
+    autoMode: false,
     selectedMode: "money",
     autoTor: true,
     autoTrade: false,

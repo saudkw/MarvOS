@@ -1,7 +1,5 @@
 import { loadOptions, saveOptions } from "/MarvOS/lib/options.js";
-import { MARVOS_SOURCE_PATH, readStatus, STATUS_NAMES } from "/MarvOS/lib/status.js";
-import { getProgressSnapshot } from "/MarvOS/lib/progression.js";
-import { rankMoneyTargets } from "/MarvOS/lib/scoring.js";
+import { readStatus, STATUS_NAMES } from "/MarvOS/lib/status.js";
 import { isScriptRunningOnHome, stopManagedRuntime } from "/MarvOS/lib/runtime.js";
 
 const SCRIPTS = {
@@ -26,7 +24,7 @@ const DEFAULT_OPTIONS = {
     sharePurchased: false,
     shareReserve: 32,
     helper: true,
-    autoMode: true,
+    autoMode: false,
     selectedMode: "money",
     autoTor: true,
     autoTrade: false,
@@ -37,20 +35,13 @@ const DEFAULT_OPTIONS = {
 
 const REFRESH_PORT = 20;
 const MODES = ["startup", "money", "xp", "rep"];
-const TARGET_CACHE_MS = 15_000;
-const NETWORK_CACHE_MS = 5_000;
-
-let cachedTargets = [];
-let cachedTargetsAt = 0;
-let cachedNetwork = null;
-let cachedNetworkAt = 0;
 
 /** @param {NS} ns */
 export async function main(ns) {
     ns.disableLog("ALL");
     ns.ui.openTail();
-    ns.ui.resizeTail(980, 760);
-    ns.ui.setTailTitle("MarvOS");
+    ns.ui.resizeTail(760, 520);
+    ns.ui.setTailTitle("MarvOS Minimal");
 
     while (true) {
         const options = loadOptions(ns, DEFAULT_OPTIONS);
@@ -62,657 +53,183 @@ export async function main(ns) {
             hacknet: readStatus(ns, STATUS_NAMES.hacknet),
             stock: readStatus(ns, STATUS_NAMES.stock),
         };
-        const progress = getProgressSnapshot(ns);
-        const shouldRankTargets = options.showScoreboard || options.showDiagnostics || options.formulasDebug;
-        const topTargets = shouldRankTargets ? getCachedTopTargets(ns, 6) : [];
-        const modeState = deriveModeState(options, statuses.orchestrator, progress);
-        const network = getCachedNetworkSummary(ns);
-        const diagnostics = getTargetDiagnostics(progress, statuses.formulas, topTargets);
-        const install = getInstallState(ns);
+        const snapshot = getSnapshot(ns);
         const theme = ns.ui.getTheme();
 
         ns.clearLog();
-        ns.printRaw(renderHeader(ns, theme, modeState, diagnostics, options, progress));
-        ns.printRaw(renderModeBar(ns, theme, options, modeState));
-        ns.printRaw(renderOverview(ns, theme, progress, modeState));
-        ns.printRaw(renderMainGrid(ns, theme, options, statuses, progress, modeState, network));
-        ns.printRaw(renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install, options));
-
+        ns.printRaw(renderApp(ns, theme, options, statuses, snapshot));
         await waitForRefresh(ns);
     }
 }
 
-function renderHeader(ns, theme, modeState, diagnostics, options, progress) {
+function renderApp(ns, theme, options, statuses, snapshot) {
+    const automationRunning = isScriptRunningOnHome(ns, SCRIPTS.orchestrator);
+    const currentMode = statuses.orchestrator?.mode ?? (options.autoMode ? "auto" : options.selectedMode);
+
     return (
-        <div style={heroStyle(theme)}>
-            <div>
-                <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 1 }}>MarvOS</div>
-                <div style={{ opacity: 0.8, marginTop: 4 }}>Progression-first control plane for this run.</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                    {renderBadge(theme, `Target ${diagnostics.currentTarget || "none"}`, diagnostics.currentTarget ? "active" : "neutral")}
-                    {renderBadge(theme, `Automation ${isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "armed" : "off"}`, isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "active" : "neutral")}
-                    {renderBadge(theme, `Buyer ${buyModeLabel(options.buyMode)}`, options.buyMode === "aggressive" ? "off" : "active")}
-                    {renderBadge(theme, `Stocks ${stockLabel(progress.stock)}`, progress.stock.autoTradeReady ? "active" : "neutral")}
-                    {renderBadge(theme, `Share ${progress.stock ? (options.shareHome || options.sharePurchased ? "armed" : "off") : "off"}`, options.shareHome || options.sharePurchased ? "active" : "neutral")}
+        <div style={rootStyle(theme)}>
+            <div style={headerStyle(theme)}>
+                <div>
+                    <div style={{ fontSize: 28, fontWeight: 700 }}>MarvOS</div>
+                    <div style={{ opacity: 0.76, marginTop: 4 }}>Minimal debug panel. Heavy UI disabled while backend is being stabilized.</div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {renderBadge(theme, automationRunning ? "Automation Armed" : "Automation Off", automationRunning ? "active" : "off")}
+                    {renderBadge(theme, options.autoMode ? "Auto" : "Manual", options.autoMode ? "active" : "neutral")}
+                    {renderBadge(theme, `Mode ${labelMode(currentMode)}`, "neutral")}
+                    {renderBadge(theme, snapshot.formulas ? "Formulas Ready" : "Formulas Missing", snapshot.formulas ? "active" : "off")}
                 </div>
             </div>
-            <div style={{ textAlign: "right" }}>
-                <div style={{ opacity: 0.7, fontSize: 12, textTransform: "uppercase" }}>Current Mode</div>
-                <div style={{ marginTop: 4 }}>{renderBadge(theme, modeLabel(modeState.currentMode), "active")}</div>
-                <div style={{ marginTop: 8, opacity: 0.8 }}>{modeState.reason}</div>
-            </div>
-        </div>
-    );
-}
 
-function renderModeBar(ns, theme, options, modeState) {
-    return (
-        <div style={cardStyle(theme)}>
-            <div style={cardHeaderStyle}>
-                <div style={cardTitleStyle}>Mode Bar</div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    {renderBadge(theme, isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "Automation Armed" : "Automation Off", isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "active" : "off")}
-                    {renderBadge(theme, options.autoMode ? "Auto On" : "Manual", options.autoMode ? "active" : "off")}
-                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleAutomation(ns)}>
-                        {isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "Stop Automation" : "Start Automation"}
+            <div style={sectionStyle(theme)}>
+                <div style={sectionTitleStyle}>Controls</div>
+                <div style={buttonRowStyle}>
+                    <button style={buttonStyle(theme)} onClick={() => toggleAutomation(ns)}>
+                        {automationRunning ? "Stop Automation" : "Start Automation"}
                     </button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleAutoMode(ns, options)}>
+                    <button style={buttonStyle(theme)} onClick={() => toggleAutoMode(ns, options)}>
                         {options.autoMode ? "Turn Auto Off" : "Turn Auto On"}
                     </button>
+                    <button style={buttonStyle(theme)} onClick={() => stopManaged(ns)}>Stop Engines</button>
+                    <button style={buttonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.load, [])}>Load OS</button>
                 </div>
-            </div>
-            <div style={{ opacity: 0.82, marginBottom: 10 }}>
-                Opening MarvOS does not arm automation by itself. Start automation when you want it to drive the run. With auto on, MarvOS switches between Startup, XP, and Money based on progression. Rep mode is a manual push mode.
-            </div>
-            <div style={modeBarStyle}>
-                {MODES.map((mode) => (
-                    <button
-                        key={mode}
-                        style={modeButtonStyle(theme, modeState.currentMode === mode, !options.autoMode && options.selectedMode === mode)}
-                        onClick={() => setManualMode(ns, options, mode)}
-                    >
-                        <div style={{ fontWeight: 700 }}>{modeLabel(mode)}</div>
-                        <div style={{ opacity: 0.75, fontSize: 12 }}>{modeHint(mode)}</div>
-                    </button>
-                ))}
-            </div>
-        </div>
-    );
-}
-
-function renderOverview(ns, theme, progress, modeState) {
-    return (
-        <div style={compactGridStyle(6)}>
-            {renderStatTile(theme, "Hack", String(progress.hacking))}
-            {renderStatTile(theme, "Money", ns.formatNumber(progress.money, 2))}
-            {renderStatTile(theme, "Factions", String(progress.factions.length))}
-            {renderStatTile(theme, "TOR", progress.tor ? "Online" : "Missing")}
-            {renderStatTile(theme, "Formulas", progress.formulas ? "Ready" : "Missing")}
-            {renderStatTile(theme, "Openers", `${progress.portOpeners}/5`)}
-            {renderStatTile(theme, "Stocks", stockLabel(progress.stock))}
-            {renderStatTile(theme, "Auto Plan", modeLabel(progress.suggestedMode))}
-            {renderStatTile(theme, "Requested", optionsLabel(modeState.requestedMode))}
-            {renderStatTile(theme, "Hack Goal", progress.nextHackGoal ? String(progress.nextHackGoal) : "None")}
-            {renderStatTile(theme, "BitRunners", milestoneLabel(progress, "BitRunners"))}
-            {renderWideTile(theme, "Recommendation", progress.recommendation, 2)}
-            {renderWideTile(theme, "Mode Reason", modeState.reason, 2)}
-        </div>
-    );
-}
-
-function renderMainGrid(ns, theme, options, statuses, progress, modeState, network) {
-    const moneyRunning = isScriptRunningOnHome(ns, SCRIPTS.formulas);
-    return (
-        <div style={twoColumnGridStyle}>
-            <div style={cardStyle(theme)}>
-                <div style={cardHeaderStyle}>
-                    <div style={cardTitleStyle}>Operations</div>
-                    {renderBadge(theme, modeLabel(modeState.currentMode), "active")}
-                </div>
-                <div style={miniSectionTitle}>Managed Engines</div>
-                {renderEngineRow(theme, "Orchestrator", isScriptRunningOnHome(ns, SCRIPTS.orchestrator), "Controls mode switching")}
-                {renderEngineRow(theme, "Money", isScriptRunningOnHome(ns, SCRIPTS.formulas), statuses.formulas?.target ?? "formulas-batcher")}
-                {renderEngineRow(theme, "Startup", isScriptRunningOnHome(ns, SCRIPTS.startup), statuses.startup?.target ?? "startup")}
-                {renderEngineRow(theme, "XP", isScriptRunningOnHome(ns, SCRIPTS.xp), options.xpTarget || "auto target")}
-                {renderEngineRow(theme, "Rep", isScriptRunningOnHome(ns, SCRIPTS.share), "rep-share")}
-                {renderEngineRow(theme, "Stocks", isScriptRunningOnHome(ns, SCRIPTS.stock), stockEngineLabel(progress.stock, options.autoTrade))}
-                {renderEngineRow(theme, "Hacknet", isScriptRunningOnHome(ns, SCRIPTS.hacknet), statuses.hacknet?.action ?? "hacknet-manager")}
-
-                <div style={miniSectionTitle}>Actions</div>
-                <div style={buttonWrapStyle}>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.backdoor, [])}>Backdoor Next</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => runRootScript(ns, options.rootScript)}>Run Rooter</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => runBuyScript(ns, options)}>Run Buyer</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => runStockTrader(ns, progress)}>Run Stocks</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.load, [])}>Load OS</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => openControlledLogs(ns)}>Open Logs</button>
-                    <button style={dangerButtonStyle(theme)} onClick={() => stopManaged(ns)}>Stop Engines</button>
-                </div>
-
-                <div style={miniSectionTitle}>Config</div>
-                <div style={buttonWrapStyle}>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => setXpTarget(ns, options)}>XP Target</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => setRootScript(ns, options)}>Root Script</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => setBuyScript(ns, options)}>Buy Script</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => toggleBuyMode(ns, options)}>
-                        Buy Mode: {buyModeLabel(options.buyMode)}
-                    </button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => setReserve(ns, options, "shareReserve", "Share reserve on home")}>Share Reserve</button>
-                    <button style={secondaryButtonStyle(theme)} onClick={() => setReserve(ns, options, "homeReserve", "Home reserve for startup/xp")}>Home Reserve</button>
-                </div>
-                <div style={compactGridStyle(2)}>
-                    {renderStatTile(theme, "XP Target", options.xpTarget || "auto")}
-                    {renderStatTile(theme, "Root Script", options.rootScript)}
-                    {renderStatTile(theme, "Buy Script", options.buyScript || "unset")}
-                    {renderStatTile(theme, "Buy Mode", buyModeLabel(options.buyMode))}
-                    {renderStatTile(theme, "Share Reserve", String(options.shareReserve))}
-                    {renderStatTile(theme, "Home Reserve", String(options.homeReserve))}
-                </div>
-
-                <div style={miniSectionTitle}>Flags</div>
-                {renderFlagRow(ns, theme, options, "autoTor", "Auto TOR", "Try to buy TOR automatically when Singularity access exists")}
-                {renderFlagRow(ns, theme, options, "autoTrade", "Auto Trade", stockFlagDetail(progress.stock))}
-                {renderFlagRow(ns, theme, options, "formulasDebug", "Formulas Debug", "Show target rejection detail in money logs")}
-                {renderFlagRow(ns, theme, options, "shareHome", "Share Home", "Allow rep-share to consume spare home RAM")}
-                {renderFlagRow(ns, theme, options, "sharePurchased", "Share Bought", "Allow rep-share to use purchased servers")}
-                {renderFlagRow(ns, theme, options, "showScoreboard", "Target Scoreboard", "Render the ranked target table in the UI")}
-                {renderFlagRow(ns, theme, options, "showDiagnostics", "Target Diagnostics", "Render the batch diagnostics panel in the UI")}
-                {renderFlagRow(ns, theme, options, "helper", "Helper Text", "Keep extra explanations visible")}
-            </div>
-
-            <div style={cardStyle(theme)}>
-                <div style={cardHeaderStyle}>
-                    <div style={cardTitleStyle}>Live Activity</div>
-                    {renderBadge(theme, options.autoMode ? "Auto" : "Manual", options.autoMode ? "active" : "off")}
-                </div>
-                {renderStatusBlock(ns, theme, "Orchestrator", statuses.orchestrator, {
-                    idleAction: "No orchestration status yet",
-                    fallbackText: modeState.reason,
-                })}
-                {renderStatusBlock(ns, theme, "Money Engine", statuses.formulas, {
-                    idleAction: moneyRunning
-                        ? "Running (waiting for status)"
-                        : modeState.currentMode === "money" || modeState.currentMode === "rep"
-                            ? "Not running"
-                            : "Idle",
-                    fallbackText: (modeState.currentMode === "money" || modeState.currentMode === "rep")
-                        ? formatOrchestratorNotes(statuses.orchestrator?.notes)
-                        : undefined,
-                })}
-                {renderStatusBlock(ns, theme, "Startup", statuses.startup, {
-                    idleAction: "Idle",
-                })}
-                {renderStatusBlock(ns, theme, "XP Grind", statuses.xp, {
-                    idleAction: "Idle",
-                })}
-                {renderStatusBlock(ns, theme, "Stock Trader", statuses.stock, {
-                    idleAction: progress.stock.autoTradeReady ? "Idle" : stockFlagDetail(progress.stock),
-                })}
-                {renderStatusBlock(ns, theme, "Hacknet", statuses.hacknet, {
-                    idleAction: "Idle",
-                })}
-
-                <div style={miniSectionTitle}>Network</div>
-                <div style={compactGridStyle(2)}>
-                    {renderStatTile(theme, "Workers", `${network.activeWorkers}/${network.totalWorkers}`)}
-                    {renderStatTile(theme, "Usable RAM", ns.formatRam(network.totalUsableRam, 2))}
-                    {renderStatTile(theme, "Money RAM", ns.formatRam(network.moneyRam, 2))}
-                    {renderStatTile(theme, "Share RAM", ns.formatRam(network.shareRam, 2))}
-                    {renderStatTile(theme, "Other RAM", ns.formatRam(network.otherRam, 2))}
-                    {renderStatTile(theme, "Free RAM", ns.formatRam(network.freeRam, 2))}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function renderBottomGrid(ns, theme, topTargets, progress, diagnostics, install, options) {
-    return (
-        <div>
-            <div style={twoColumnGridStyle}>
-                <div style={cardStyle(theme)}>
-                    <div style={cardHeaderStyle}>
-                        <div style={cardTitleStyle}>Target Scoreboard</div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            {renderBadge(theme, options.showScoreboard ? `${topTargets.length} ranked` : "hidden", "neutral")}
-                            <button style={smallButtonStyle(theme)} onClick={() => toggleOption(ns, options, "showScoreboard")}>
-                                {options.showScoreboard ? "Hide" : "Show"}
-                            </button>
-                        </div>
-                    </div>
-                    {!options.showScoreboard ? (
-                        <div style={{ opacity: 0.76 }}>Enable Target Scoreboard when you want a ranked target snapshot. Hidden by default to keep the UI lighter.</div>
-                    ) : topTargets.length === 0
-                        ? <div style={{ opacity: 0.8 }}>No valid ranked targets.</div>
-                        : topTargets.map((row) => (
-                            <div key={row.host} style={tableRowStyle(theme)}>
-                                <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontWeight: 700 }}>{row.host}</div>
-                                    <div style={{ opacity: 0.76, marginTop: 2 }}>
-                                        req={row.requiredHack} | chance={(row.chance * 100).toFixed(1)}% | hack={Math.round(row.hackTime / 1000)}s
-                                    </div>
-                                </div>
-                                <div style={{ textAlign: "right" }}>
-                                    <div>{Math.floor(row.score)}</div>
-                                    <div style={{ opacity: 0.76, marginTop: 2 }}>{ns.formatNumber(row.maxMoney, 2)}</div>
-                                </div>
-                            </div>
-                        ))}
-                </div>
-
-                <div style={cardStyle(theme)}>
-                    <div style={cardHeaderStyle}>
-                        <div style={cardTitleStyle}>Progression</div>
-                        {renderBadge(theme, `${progress.factions.length} factions`, "neutral")}
-                    </div>
-                    {progress.milestones.map((m) => (
-                        <div key={m.name} style={tableRowStyle(theme)}>
-                            <div>
-                                <div style={{ fontWeight: 700 }}>{m.name}</div>
-                                <div style={{ opacity: 0.76, marginTop: 2 }}>{m.faction}</div>
-                            </div>
-                            <div style={{ textAlign: "right", opacity: 0.9 }}>
-                                <div>req={m.requiredHack ?? "?"}</div>
-                                <div style={{ marginTop: 2 }}>
-                                    rooted={yesNo(m.rooted)} | backdoor={yesNo(m.backdoored)} | joined={yesNo(m.joined)}
-                                </div>
-                            </div>
-                        </div>
+                <div style={buttonRowStyle}>
+                    {MODES.map((mode) => (
+                        <button key={mode} style={modeButtonStyle(theme, !options.autoMode && options.selectedMode === mode)} onClick={() => setManualMode(ns, options, mode)}>
+                            {labelMode(mode)}
+                        </button>
                     ))}
                 </div>
-            </div>
-            <div style={twoColumnGridStyle}>
-                <div style={cardStyle(theme)}>
-                    <div style={cardHeaderStyle}>
-                        <div style={cardTitleStyle}>Target Diagnostics</div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            {renderBadge(theme, options.showDiagnostics ? diagnostics.state : "hidden", diagnostics.state === "Batching" ? "active" : "neutral")}
-                            <button style={smallButtonStyle(theme)} onClick={() => toggleOption(ns, options, "showDiagnostics")}>
-                                {options.showDiagnostics ? "Hide" : "Show"}
-                            </button>
-                        </div>
-                    </div>
-                    {!options.showDiagnostics ? (
-                        <div style={{ opacity: 0.76 }}>Enable Target Diagnostics only when you want live batch state and debug detail. Hidden by default to reduce UI overhead.</div>
-                    ) : (
-                        <>
-                    <div style={compactGridStyle(2)}>
-                        {renderStatTile(theme, "Current", diagnostics.currentTarget || "none")}
-                        {renderStatTile(theme, "Top Candidate", diagnostics.topCandidate || "none")}
-                        {renderStatTile(theme, "Action", diagnostics.action)}
-                        {renderStatTile(theme, "Chance", diagnostics.chance)}
-                        {renderStatTile(theme, "Money", diagnostics.money)}
-                        {renderStatTile(theme, "Security", diagnostics.security)}
-                        {renderStatTile(theme, "Hack %", diagnostics.hackPct)}
-                        {renderStatTile(theme, "Interval", diagnostics.interval)}
-                    </div>
-                    {options.formulasDebug && diagnostics.debug.length > 0 ? (
-                        <div style={{ marginTop: 10 }}>
-                            <div style={miniSectionTitle}>Debug</div>
-                            {diagnostics.debug.map((line, index) => (
-                                <div key={`${index}:${line}`} style={debugLineStyle}>{line}</div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div style={{ marginTop: 10, opacity: 0.75 }}>
-                            {options.formulasDebug ? "No target debug lines yet." : "Enable Formulas Debug to show accept/reject reasoning here."}
-                        </div>
-                    )}
-                        </>
-                    )}
-                </div>
-
-                <div style={cardStyle(theme)}>
-                    <div style={cardHeaderStyle}>
-                        <div style={cardTitleStyle}>Install And Updates</div>
-                        {renderBadge(theme, install.hasSavedSource ? "Saved Source" : "Default Source", "neutral")}
-                    </div>
-                    <div style={compactGridStyle(2)}>
-                        {renderStatTile(theme, "Bundle Source", install.sourceLabel)}
-                        {renderStatTile(theme, "Bootstrap", "wget + run")}
-                        {renderStatTile(theme, "Updater", "run MarvOS/load.js")}
-                        {renderStatTile(theme, "Installer", "/MarvOS/install.js")}
-                    </div>
-                    <div style={{ marginTop: 10, opacity: 0.82 }}>
-                        First install:
-                    </div>
-                    <div style={codeLineStyle}>
-                        wget {install.loaderUrl} MarvOS/load.js
-                    </div>
-                    <div style={codeLineStyle}>
-                        run MarvOS/load.js
-                    </div>
-                    <div style={{ marginTop: 10, opacity: 0.82 }}>
-                        Current bundle source:
-                    </div>
-                    <div style={codeLineStyle}>{install.source}</div>
-                    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button style={secondaryButtonStyle(theme)} onClick={() => runOnce(ns, SCRIPTS.load, [])}>Load OS Now</button>
-                        <button style={secondaryButtonStyle(theme)} onClick={() => setBundleSource(ns)}>Set Source</button>
-                    </div>
+                <div style={buttonRowStyle}>
+                    <button style={buttonStyle(theme)} onClick={() => runRootScript(ns, options.rootScript)}>Run Rooter</button>
+                    <button style={buttonStyle(theme)} onClick={() => runBuyScript(ns, options)}>Run Buyer</button>
+                    <button style={buttonStyle(theme)} onClick={() => runStockTrader(ns, snapshot)}>Run Stocks</button>
+                    <button style={buttonStyle(theme)} onClick={() => openControlledLogs(ns)}>Open Logs</button>
                 </div>
             </div>
+
+            <div style={sectionStyle(theme)}>
+                <div style={sectionTitleStyle}>Snapshot</div>
+                <div style={gridStyle(4)}>
+                    {tile(theme, "Hack", String(snapshot.hacking))}
+                    {tile(theme, "Money", ns.formatNumber(snapshot.money, 2))}
+                    {tile(theme, "TOR", snapshot.tor ? "Online" : "Missing")}
+                    {tile(theme, "Stocks", snapshot.stockLabel)}
+                    {tile(theme, "Bought Servers", String(snapshot.purchasedServers))}
+                    {tile(theme, "Root Script", options.rootScript)}
+                    {tile(theme, "Buy Script", options.buyScript || "off")}
+                    {tile(theme, "Buy Mode", labelBuyMode(options.buyMode))}
+                </div>
+            </div>
+
+            <div style={sectionStyle(theme)}>
+                <div style={sectionTitleStyle}>Engine Status</div>
+                {renderStatus(theme, "Orchestrator", statuses.orchestrator, automationRunning ? "Waiting for status..." : "Automation is off")}
+                {renderStatus(theme, "Money", statuses.formulas, isScriptRunningOnHome(ns, SCRIPTS.formulas) ? "Running" : "Stopped")}
+                {renderStatus(theme, "Startup", statuses.startup, isScriptRunningOnHome(ns, SCRIPTS.startup) ? "Running" : "Stopped")}
+                {renderStatus(theme, "XP", statuses.xp, isScriptRunningOnHome(ns, SCRIPTS.xp) ? "Running" : "Stopped")}
+                {renderStatus(theme, "Stock Trader", statuses.stock, isScriptRunningOnHome(ns, SCRIPTS.stock) ? "Running" : stockReadinessText(snapshot))}
+                {renderStatus(theme, "Hacknet", statuses.hacknet, isScriptRunningOnHome(ns, SCRIPTS.hacknet) ? "Running" : "Stopped")}
+            </div>
         </div>
     );
 }
 
-function renderEngineRow(theme, label, running, detail) {
-    return (
-        <div style={rowStyle(theme)}>
-            <div>
-                <div style={{ fontWeight: 700 }}>{label}</div>
-                <div style={{ opacity: 0.78, marginTop: 2 }}>{detail}</div>
-            </div>
-            {renderBadge(theme, running ? "Running" : "Stopped", running ? "active" : "off")}
-        </div>
-    );
+function getSnapshot(ns) {
+    const player = ns.getPlayer();
+    const stock = getStockState(ns);
+    return {
+        hacking: ns.getHackingLevel(),
+        money: ns.getServerMoneyAvailable("home"),
+        tor: Boolean(player.tor) || Boolean(player.hasTorRouter),
+        formulas: ns.fileExists("Formulas.exe", "home"),
+        purchasedServers: ns.getPurchasedServers().length,
+        stock,
+        stockLabel: stock.level,
+    };
 }
 
-function renderFlagRow(ns, theme, options, key, label, detail) {
-    return (
-        <div style={rowStyle(theme)}>
-            <div>
-                <div style={{ fontWeight: 700 }}>{label}</div>
-                <div style={{ opacity: 0.78, marginTop: 2 }}>{detail}</div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {renderBadge(theme, options[key] ? "On" : "Off", options[key] ? "active" : "off")}
-                <button style={secondaryButtonStyle(theme)} onClick={() => toggleOption(ns, options, key)}>Toggle</button>
-            </div>
-        </div>
-    );
-}
-
-function renderStatusBlock(ns, theme, title, status, options = {}) {
-    if (!status) {
-        return (
-            <div style={statusCardStyle(theme)}>
-                <div style={{ fontWeight: 700 }}>{title}</div>
-                <div style={{ opacity: 0.8, marginTop: 4 }}>{options.idleAction ?? "Idle"}</div>
-                {options.fallbackText ? <div style={{ marginTop: 4, opacity: 0.72 }}>{options.fallbackText}</div> : null}
-            </div>
-        );
+function getStockState(ns) {
+    const stock = ns.stock;
+    if (!stock) {
+        return { wse: false, tix: false, fourSigmaApi: false, level: "Locked" };
     }
 
-    const lines = [];
-    if (status.target) lines.push(`target=${status.target}`);
-    if (status.action) lines.push(status.action);
-    if (status.mode) lines.push(`mode=${status.mode}`);
-    if (status.reason) lines.push(status.reason);
-    if (status.moneyPct !== undefined) lines.push(`money ${Number(status.moneyPct).toFixed(1)}%`);
-    if (status.secDiff !== undefined) lines.push(`sec +${Number(status.secDiff).toFixed(2)}`);
-    if (status.freeRam !== undefined) lines.push(`RAM ${ns.formatRam(status.freeRam, 2)}`);
-    if (status.nextHackGoal) lines.push(`goal ${status.nextHackGoal}`);
+    let wse = false;
+    let tix = false;
+    let fourSigmaApi = false;
 
+    try { wse = stock.hasWSEAccount(); } catch {}
+    try { tix = stock.hasTIXAPIAccess(); } catch {}
+    try { fourSigmaApi = stock.has4SDataTIXAPI(); } catch {}
+
+    let level = "Locked";
+    if (wse && !tix) level = "Manual";
+    if (wse && tix && !fourSigmaApi) level = "TIX";
+    if (wse && tix && fourSigmaApi) level = "4S API";
+
+    return { wse, tix, fourSigmaApi, level };
+}
+
+function renderStatus(theme, label, status, fallback) {
+    const summary = status ? summarizeStatus(status) : fallback;
     return (
-        <div style={statusCardStyle(theme)}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <div style={{ fontWeight: 700 }}>{title}</div>
-                {renderBadge(theme, ageText(status.updatedAt), "neutral")}
-            </div>
-            <div style={{ marginTop: 6, opacity: 0.9 }}>{lines.join(" | ") || (options.idleAction ?? "Idle")}</div>
-            {status.recommendation ? <div style={{ marginTop: 6, opacity: 0.74 }}>{status.recommendation}</div> : null}
+        <div style={statusRowStyle(theme)}>
+            <div style={{ fontWeight: 700 }}>{label}</div>
+            <div style={{ opacity: 0.82, flex: 1 }}>{summary}</div>
+            <div style={{ opacity: 0.62, fontSize: 12 }}>{status?.updatedAt ? ageText(status.updatedAt) : "idle"}</div>
         </div>
     );
 }
 
-function renderStatTile(theme, label, value) {
-    return (
-        <div key={label} style={statTileStyle(theme)}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", opacity: 0.7 }}>{label}</div>
-            <div style={{ marginTop: 6, fontWeight: 700 }}>{value}</div>
-        </div>
-    );
+function summarizeStatus(status) {
+    const parts = [];
+    if (status.mode) parts.push(`mode=${status.mode}`);
+    if (status.target) parts.push(`target=${status.target}`);
+    if (status.action) parts.push(status.action);
+    if (status.reason) parts.push(status.reason);
+    if (status.moneyPct !== undefined) parts.push(`money ${Number(status.moneyPct).toFixed(1)}%`);
+    if (status.secDiff !== undefined) parts.push(`sec +${Number(status.secDiff).toFixed(2)}`);
+    if (Array.isArray(status.notes) && status.notes.length > 0) parts.push(status.notes.join(" | "));
+    return parts.join(" | ") || "No status";
 }
 
-function renderWideTile(theme, label, value, span = 2) {
-    return (
-        <div key={label} style={{ ...statTileStyle(theme), gridColumn: `span ${span}` }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", opacity: 0.7 }}>{label}</div>
-            <div style={{ marginTop: 6 }}>{value}</div>
-        </div>
-    );
-}
-
-function getNetworkSummary(ns) {
-    const purchased = new Set(ns.getPurchasedServers());
-    const hosts = discoverHosts(ns, purchased);
-    let totalWorkers = 0;
-    let activeWorkers = 0;
-    let totalUsableRam = 0;
-    let freeRam = 0;
-    let moneyRam = 0;
-    let shareRam = 0;
-    let otherRam = 0;
-
-    for (const host of hosts) {
-        if (!ns.hasRootAccess(host)) continue;
-        const maxRam = ns.getServerMaxRam(host);
-        if (maxRam <= 0) continue;
-        const reserve = host === "home" ? 32 : 0;
-        const usable = Math.max(0, maxRam - reserve);
-        if (usable <= 0) continue;
-
-        totalWorkers += 1;
-        totalUsableRam += usable;
-        freeRam += Math.max(0, usable - ns.getServerUsedRam(host));
-
-        let hostActive = false;
-        for (const proc of ns.ps(host)) {
-            const ram = proc.threads * ns.getScriptRam(proc.filename, host);
-            if (["hack.js", "grow.js", "weaken.js", "formulas-batcher.js", "startup.js", "xp-grind.js"].includes(proc.filename)) {
-                moneyRam += ram;
-                hostActive = true;
-            } else if (proc.filename === "share-worker.js" || proc.filename === "rep-share.js") {
-                shareRam += ram;
-                hostActive = true;
-            } else {
-                otherRam += ram;
+function toggleAutomation(ns) {
+    if (isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) {
+        for (const proc of ns.ps("home")) {
+            if (matchesScript(proc.filename, SCRIPTS.orchestrator)) {
+                ns.kill(proc.pid);
             }
         }
-
-        if (hostActive) activeWorkers += 1;
+        notify(ns, "Stopped automation");
+    } else {
+        ensureOrchestrator(ns);
     }
-
-    return { totalWorkers, activeWorkers, totalUsableRam, freeRam, moneyRam, shareRam, otherRam };
+    triggerRefresh(ns);
 }
 
-function getCachedNetworkSummary(ns) {
-    const now = Date.now();
-    if (!cachedNetwork || now - cachedNetworkAt > NETWORK_CACHE_MS) {
-        cachedNetwork = getNetworkSummary(ns);
-        cachedNetworkAt = now;
+function ensureOrchestrator(ns) {
+    if (isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) return;
+    if (!ns.fileExists(SCRIPTS.orchestrator, "home")) {
+        notify(ns, "Missing /MarvOS/orchestrator.js");
+        return;
     }
-    return cachedNetwork;
+    const pid = ns.exec(SCRIPTS.orchestrator, "home", 1);
+    notify(ns, pid > 0 ? "Started automation" : "Failed to start automation");
 }
 
-function getTargetDiagnostics(progress, formulasStatus, topTargets) {
-    const batchPlan = formulasStatus?.batchPlan ?? null;
-    return {
-        currentTarget: formulasStatus?.target ?? "",
-        topCandidate: topTargets[0]?.host ?? "",
-        state: inferTargetState(formulasStatus),
-        action: formulasStatus?.action ?? "idle",
-        chance: formulasStatus?.chance !== undefined ? `${(Number(formulasStatus.chance) * 100).toFixed(1)}%` : "n/a",
-        money: formulasStatus?.moneyPct !== undefined ? `${Number(formulasStatus.moneyPct).toFixed(1)}%` : "n/a",
-        security: formulasStatus?.secDiff !== undefined ? `+${Number(formulasStatus.secDiff).toFixed(2)}` : "n/a",
-        hackPct: batchPlan?.hackPct !== undefined ? `${(Number(batchPlan.hackPct) * 100).toFixed(2)}%` : "n/a",
-        interval: batchPlan?.launchInterval !== undefined ? `${Math.round(Number(batchPlan.launchInterval))}ms` : "n/a",
-        debug: Array.isArray(formulasStatus?.debug) ? formulasStatus.debug.slice(0, 8) : [],
-    };
-}
-
-function inferTargetState(formulasStatus) {
-    const batchType = String(formulasStatus?.batchPlan?.type ?? "").toLowerCase();
-    const action = String(formulasStatus?.action ?? "").toLowerCase();
-    if (!action) return "Idle";
-    if (action.includes("prep")) return "Prepping";
-    if (action.includes("waiting for ram") || action.includes("countdown")) return "Waiting";
-    if (action.includes("hwgw") || action.includes("hgw") || action.includes("hybrid")) return "Batching";
-    if (batchType === "hwgw" || batchType === "hgw" || batchType === "hybrid") return "Batching";
-    if (action.includes("waiting")) return "Waiting";
-    return "Active";
-}
-
-function getInstallState(ns) {
-    const source = readSource(ns);
-    const loaderUrl = "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS/load.js";
-    return {
-        source: source || "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt",
-        sourceLabel: source ? "custom" : "default repo",
-        hasSavedSource: Boolean(source),
-        loaderUrl,
-    };
-}
-
-function readSource(ns) {
-    if (!ns.fileExists(MARVOS_SOURCE_PATH, "home")) return "";
-    return String(ns.read(MARVOS_SOURCE_PATH) ?? "").trim();
-}
-
-function discoverHosts(ns, purchased = new Set(ns.getPurchasedServers())) {
-    const seen = new Set(["home"]);
-    const queue = ["home"];
-    while (queue.length > 0) {
-        const host = queue.shift();
-        for (const next of ns.scan(host)) {
-            if (!seen.has(next)) {
-                seen.add(next);
-                queue.push(next);
-            }
-        }
-    }
-    for (const host of purchased) seen.add(host);
-    return seen;
-}
-
-function deriveModeState(options, orchestratorStatus, progress) {
-    if (orchestratorStatus) {
-        return {
-            currentMode: orchestratorStatus.mode ?? progress.suggestedMode ?? "money",
-            requestedMode: orchestratorStatus.requestedMode ?? (options.autoMode ? "auto" : options.selectedMode),
-            reason: orchestratorStatus.reason ?? progress.suggestionReason ?? progress.recommendation,
-        };
-    }
-
-    return {
-        currentMode: options.autoMode ? progress.suggestedMode : options.selectedMode,
-        requestedMode: options.autoMode ? "auto" : options.selectedMode,
-        reason: progress.suggestionReason ?? progress.recommendation,
-    };
-}
-
-function milestoneLabel(progress, faction) {
-    const row = progress.milestones.find((item) => item.faction === faction);
-    if (!row) return "Unknown";
-    if (row.joined) return "Joined";
-    if (row.backdoored) return "Ready";
-    return "Pending";
-}
-
-function getCachedTopTargets(ns, limit) {
-    const now = Date.now();
-    if (now - cachedTargetsAt > TARGET_CACHE_MS || cachedTargets.length === 0) {
-        cachedTargets = rankMoneyTargets(ns, { limit: Math.max(limit, 8) });
-        cachedTargetsAt = now;
-    }
-    return cachedTargets.slice(0, limit);
-}
-
-function stockLabel(stock) {
-    switch (stock.level) {
-        case "4s": return "4S API";
-        case "pre-4s": return "TIX";
-        case "manual": return "Manual";
-        default: return "Locked";
-    }
-}
-
-function stockEngineLabel(stock, autoTrade) {
-    if (!stock.wse) return "need WSE account";
-    if (!stock.tix) return "need TIX API";
-    return autoTrade ? `auto ${stockLabel(stock)}` : `${stockLabel(stock)} ready`;
-}
-
-function stockFlagDetail(stock) {
-    if (!stock.wse) return "Locked: buy WSE account first";
-    if (!stock.tix) return "Locked: buy TIX API access for scripts";
-    if (!stock.fourSigmaApi) return "Enabled trader uses momentum until 4S TIX API is bought";
-    return "Enabled trader uses 4S forecast data";
-}
-
-function ageText(updatedAt) {
-    if (!updatedAt) return "stale";
-    const seconds = Math.max(0, Math.floor((Date.now() - updatedAt) / 1000));
-    if (seconds < 2) return "live";
-    if (seconds < 60) return `${seconds}s ago`;
-    return `${Math.floor(seconds / 60)}m ago`;
-}
-
-function formatOrchestratorNotes(notes) {
-    if (!Array.isArray(notes) || notes.length === 0) {
-        return "Check home RAM and target eligibility.";
-    }
-    return notes.join(" | ");
-}
-
-function modeLabel(mode) {
-    switch (mode) {
-        case "startup": return "Startup";
-        case "money": return "Money";
-        case "xp": return "XP";
-        case "rep": return "Rep";
-        case "auto": return "Auto";
-        default: return "Money";
-    }
-}
-
-function modeHint(mode) {
-    switch (mode) {
-        case "startup": return "Early root + growth";
-        case "money": return "Formulas batcher";
-        case "xp": return "Hack XP push";
-        case "rep": return "Money + share";
-        default: return "";
-    }
-}
-
-function optionsLabel(mode) {
-    return mode === "auto" ? "Auto" : modeLabel(mode);
-}
-
-function yesNo(value) {
-    return value ? "yes" : "no";
+function toggleAutoMode(ns, options) {
+    options.autoMode = !options.autoMode;
+    saveOptions(ns, options);
+    notify(ns, `Auto mode ${options.autoMode ? "enabled" : "disabled"}`);
+    triggerRefresh(ns);
 }
 
 function setManualMode(ns, options, mode) {
     options.autoMode = false;
     options.selectedMode = mode;
     saveOptions(ns, options);
-    notify(ns, `MarvOS manual mode -> ${modeLabel(mode)}${isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
-    triggerRefresh(ns);
-}
-
-function toggleAutoMode(ns, options) {
-    options.autoMode = !options.autoMode;
-    saveOptions(ns, options);
-    notify(ns, `MarvOS auto mode ${options.autoMode ? "enabled" : "disabled"}${isScriptRunningOnHome(ns, SCRIPTS.orchestrator) ? "" : " (automation off)"}`);
-    triggerRefresh(ns);
-}
-
-function toggleAutomation(ns) {
-    if (isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) {
-        let stopped = 0;
-        for (const proc of ns.ps("home")) {
-            if (matchesScript(proc.filename, SCRIPTS.orchestrator)) {
-                ns.kill(proc.pid);
-                stopped += 1;
-            }
-        }
-        notify(ns, stopped > 0 ? "Stopped automation" : "Automation was already off");
-    } else {
-        ensureOrchestrator(ns);
-    }
+    notify(ns, `Manual mode -> ${labelMode(mode)}`);
     triggerRefresh(ns);
 }
 
@@ -725,12 +242,8 @@ function runOnce(ns, script, args) {
 
 function runRootScript(ns, rootScript) {
     const script = normalizeScriptPath(rootScript);
-    if (!script) {
-        notify(ns, "No root script configured");
-        return;
-    }
-    if (!ns.fileExists(script, "home")) {
-        notify(ns, `Root script missing: ${script}`);
+    if (!script || !ns.fileExists(script, "home")) {
+        notify(ns, `Root script missing: ${script || "unset"}`);
         return;
     }
     const pid = ns.exec(script, "home", 1);
@@ -740,12 +253,8 @@ function runRootScript(ns, rootScript) {
 
 function runBuyScript(ns, options) {
     const script = normalizeScriptPath(options.buyScript);
-    if (!script) {
-        notify(ns, "No buy script configured");
-        return;
-    }
-    if (!ns.fileExists(script, "home")) {
-        notify(ns, `Buy script missing: ${script}`);
+    if (!script || !ns.fileExists(script, "home")) {
+        notify(ns, `Buy script missing: ${script || "unset"}`);
         return;
     }
     const pid = ns.exec(script, "home", 1, ...buildBuyArgs(options.buyMode));
@@ -753,13 +262,13 @@ function runBuyScript(ns, options) {
     triggerRefresh(ns);
 }
 
-function runStockTrader(ns, progress) {
-    if (!progress.stock.autoTradeReady) {
-        notify(ns, stockFlagDetail(progress.stock));
+function runStockTrader(ns, snapshot) {
+    if (!snapshot.stock.wse || !snapshot.stock.tix) {
+        notify(ns, stockReadinessText(snapshot));
         return;
     }
     const pid = ns.exec(SCRIPTS.stock, "home", 1);
-    notify(ns, pid > 0 ? `Started ${SCRIPTS.stock}` : `Failed to start ${SCRIPTS.stock}`);
+    notify(ns, pid > 0 ? "Started stock trader" : "Failed to start stock trader");
     triggerRefresh(ns);
 }
 
@@ -771,94 +280,12 @@ function openControlledLogs(ns) {
             opened += 1;
         }
     }
-    notify(ns, opened > 0 ? `Opened ${opened} managed log${opened === 1 ? "" : "s"}` : "No managed scripts are running");
+    notify(ns, opened > 0 ? `Opened ${opened} log${opened === 1 ? "" : "s"}` : "No managed logs to open");
 }
 
 function stopManaged(ns) {
     const stopped = stopManagedRuntime(ns);
-    notify(ns, stopped > 0 ? `Stopped ${stopped} engine script${stopped === 1 ? "" : "s"}` : "No engine scripts were running");
-    triggerRefresh(ns);
-}
-
-function ensureOrchestrator(ns) {
-    if (isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) return;
-    if (!ns.fileExists(SCRIPTS.orchestrator, "home")) return;
-    const pid = ns.exec(SCRIPTS.orchestrator, "home", 1);
-    if (pid > 0) notify(ns, "Started /MarvOS/orchestrator.js");
-}
-
-async function setXpTarget(ns, options) {
-    const result = await ns.prompt("XP target hostname. Leave empty for auto.", { type: "text" });
-    if (result === false) return;
-    options.xpTarget = String(result || "").trim();
-    saveOptions(ns, options);
-    notify(ns, `XP target set to ${options.xpTarget || "auto"}`);
-    triggerRefresh(ns);
-}
-
-async function setRootScript(ns, options) {
-    const result = await ns.prompt("Root script filename on home.", { type: "text" });
-    if (result === false) return;
-    options.rootScript = normalizeScriptPath(String(result || "").trim() || DEFAULT_OPTIONS.rootScript);
-    saveOptions(ns, options);
-    notify(ns, `Root script set to ${options.rootScript}`);
-    triggerRefresh(ns);
-}
-
-async function setBuyScript(ns, options) {
-    const result = await ns.prompt("Purchased-server script filename on home. Leave empty to disable.", { type: "text" });
-    if (result === false) return;
-    const value = String(result || "").trim();
-    options.buyScript = value ? normalizeScriptPath(value) : "";
-    saveOptions(ns, options);
-    notify(ns, options.buyScript ? `Buy script set to ${options.buyScript}` : "Buy script disabled");
-    triggerRefresh(ns);
-}
-
-async function setBundleSource(ns) {
-    const current = readSource(ns) || "https://raw.githubusercontent.com/saudkw/MarvOS/main/MarvOS.bundle.txt";
-    const result = await ns.prompt(`Bundle source URL.\nCurrent: ${current}`, { type: "text" });
-    if (result === false) return;
-    const value = String(result || "").trim();
-    if (!value) return;
-    ns.write(MARVOS_SOURCE_PATH, value, "w");
-    notify(ns, "Bundle source updated");
-    triggerRefresh(ns);
-}
-
-async function setReserve(ns, options, key, label) {
-    const result = await ns.prompt(label, { type: "text" });
-    if (result === false) return;
-    const numeric = Math.max(0, Math.floor(Number(result)));
-    if (!Number.isFinite(numeric)) return;
-    options[key] = numeric;
-    saveOptions(ns, options);
-    notify(ns, `${label}: ${numeric}`);
-    triggerRefresh(ns);
-}
-
-function toggleOption(ns, options, key) {
-    if (key === "autoTrade") {
-        const progress = getProgressSnapshot(ns);
-        if (!progress.stock.autoTradeReady && !options.autoTrade) {
-            notify(ns, stockFlagDetail(progress.stock));
-            return;
-        }
-    }
-    options[key] = !options[key];
-    saveOptions(ns, options);
-    if (key === "autoTrade" && options[key] && !isScriptRunningOnHome(ns, SCRIPTS.orchestrator)) {
-        notify(ns, `${optionLabel(key)} enabled (automation off; start automation to activate)`);
-    } else {
-        notify(ns, `${optionLabel(key)} ${options[key] ? "enabled" : "disabled"}`);
-    }
-    triggerRefresh(ns);
-}
-
-function toggleBuyMode(ns, options) {
-    options.buyMode = options.buyMode === "aggressive" ? "passive" : "aggressive";
-    saveOptions(ns, options);
-    notify(ns, `Buy mode -> ${buyModeLabel(options.buyMode)}`);
+    notify(ns, stopped > 0 ? `Stopped ${stopped} managed script${stopped === 1 ? "" : "s"}` : "No managed scripts were running");
     triggerRefresh(ns);
 }
 
@@ -886,24 +313,6 @@ function notify(ns, message) {
     ns.tprint(`[MarvOS] ${message}`);
 }
 
-function optionLabel(key) {
-    switch (key) {
-        case "autoTor": return "Auto TOR";
-        case "autoTrade": return "Auto Trade";
-        case "formulasDebug": return "Formulas Debug";
-        case "shareHome": return "Share Home";
-        case "sharePurchased": return "Share Bought";
-        case "showScoreboard": return "Target Scoreboard";
-        case "showDiagnostics": return "Target Diagnostics";
-        case "helper": return "Helper Text";
-        default: return key;
-    }
-}
-
-function buyModeLabel(mode) {
-    return mode === "aggressive" ? "Aggressive" : "Passive";
-}
-
 function triggerRefresh(ns) {
     ns.tryWritePort(REFRESH_PORT, Date.now());
 }
@@ -912,201 +321,142 @@ async function waitForRefresh(ns) {
     ns.clearPort(REFRESH_PORT);
     await Promise.race([
         ns.nextPortWrite(REFRESH_PORT),
-        ns.asleep(5000),
+        ns.asleep(8000),
     ]);
 }
 
-function heroStyle(theme) {
+function stockReadinessText(snapshot) {
+    if (!snapshot.stock.wse) return "Need WSE account";
+    if (!snapshot.stock.tix) return "Need TIX API";
+    return "Ready";
+}
+
+function ageText(updatedAt) {
+    const seconds = Math.max(0, Math.floor((Date.now() - updatedAt) / 1000));
+    if (seconds < 2) return "live";
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m`;
+}
+
+function labelMode(mode) {
+    switch (mode) {
+        case "startup": return "Startup";
+        case "money": return "Money";
+        case "xp": return "XP";
+        case "rep": return "Rep";
+        case "auto": return "Auto";
+        default: return "Money";
+    }
+}
+
+function labelBuyMode(mode) {
+    return mode === "aggressive" ? "Aggressive" : "Passive";
+}
+
+function renderBadge(theme, text, kind) {
+    const color =
+        kind === "active" ? theme.primary :
+        kind === "off" ? theme.error :
+        theme.secondary;
+    return (
+        <div style={{
+            border: `1px solid ${color}`,
+            color,
+            padding: "4px 8px",
+            fontSize: 12,
+        }}>
+            {text}
+        </div>
+    );
+}
+
+function tile(theme, label, value) {
+    return (
+        <div style={{
+            border: `1px solid ${theme.primary}`,
+            padding: "8px 10px",
+            backgroundColor: "rgba(255,255,255,0.02)",
+        }}>
+            <div style={{ fontSize: 11, opacity: 0.68, textTransform: "uppercase" }}>{label}</div>
+            <div style={{ marginTop: 4, fontWeight: 700 }}>{value}</div>
+        </div>
+    );
+}
+
+function rootStyle(theme) {
+    return {
+        color: theme.primary,
+        fontFamily: "monospace",
+    };
+}
+
+function headerStyle(theme) {
     return {
         display: "flex",
         justifyContent: "space-between",
-        gap: 14,
-        alignItems: "center",
-        padding: "14px 16px",
-        marginBottom: 10,
+        gap: 12,
+        alignItems: "flex-start",
         border: `1px solid ${theme.primary}`,
-        background: "linear-gradient(180deg, rgba(0,255,65,0.08), rgba(255,255,255,0.02))",
-    };
-}
-
-function cardStyle(theme) {
-    return {
-        border: `1px solid ${theme.primary}`,
-        backgroundColor: "rgba(255,255,255,0.03)",
         padding: "12px 14px",
         marginBottom: 10,
+        backgroundColor: "rgba(0,255,65,0.06)",
     };
 }
 
-const cardHeaderStyle = {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 10,
-    alignItems: "center",
+function sectionStyle(theme) {
+    return {
+        border: `1px solid ${theme.primary}`,
+        padding: "12px 14px",
+        marginBottom: 10,
+        backgroundColor: "rgba(255,255,255,0.02)",
+    };
+}
+
+const sectionTitleStyle = {
+    fontSize: 15,
+    fontWeight: 700,
+    textTransform: "uppercase",
     marginBottom: 10,
 };
 
-const cardTitleStyle = {
-    fontSize: 16,
-    fontWeight: 700,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+const buttonRowStyle = {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 8,
 };
 
-function compactGridStyle(columns) {
+function buttonStyle(theme) {
+    return {
+        border: `1px solid ${theme.primary}`,
+        backgroundColor: "rgba(255,255,255,0.04)",
+        color: theme.primary,
+        padding: "6px 10px",
+        cursor: "pointer",
+    };
+}
+
+function modeButtonStyle(theme, active) {
+    return {
+        ...buttonStyle(theme),
+        backgroundColor: active ? "rgba(0,255,65,0.14)" : "rgba(255,255,255,0.04)",
+    };
+}
+
+function gridStyle(columns) {
     return {
         display: "grid",
         gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
         gap: 8,
-        marginBottom: 10,
     };
 }
 
-const twoColumnGridStyle = {
-    display: "grid",
-    gridTemplateColumns: "1.15fr 1fr",
-    gap: 10,
-    marginBottom: 10,
-};
-
-const modeBarStyle = {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-    gap: 8,
-};
-
-const buttonWrapStyle = {
-    display: "flex",
-    gap: 8,
-    flexWrap: "wrap",
-};
-
-const miniSectionTitle = {
-    fontSize: 12,
-    textTransform: "uppercase",
-    opacity: 0.72,
-    marginTop: 12,
-    marginBottom: 6,
-};
-
-function rowStyle(theme) {
+function statusRowStyle(theme) {
     return {
         display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
         gap: 10,
-        padding: "9px 10px",
-        border: `1px solid rgba(0,255,65,0.25)`,
-        backgroundColor: "rgba(255,255,255,0.02)",
-        marginBottom: 6,
+        alignItems: "center",
+        borderTop: `1px solid rgba(0,255,65,0.18)`,
+        padding: "8px 0",
     };
-}
-
-function tableRowStyle(theme) {
-    return {
-        ...rowStyle(theme),
-        alignItems: "flex-start",
-    };
-}
-
-function statTileStyle(theme) {
-    return {
-        border: `1px solid rgba(0,255,65,0.25)`,
-        backgroundColor: "rgba(255,255,255,0.02)",
-        padding: "10px 12px",
-        minWidth: 0,
-    };
-}
-
-function statusCardStyle(theme) {
-    return {
-        border: `1px solid rgba(0,255,65,0.25)`,
-        backgroundColor: "rgba(255,255,255,0.02)",
-        padding: "10px 12px",
-        marginBottom: 8,
-    };
-}
-
-const codeLineStyle = {
-    border: "1px solid rgba(0,255,65,0.25)",
-    backgroundColor: "rgba(255,255,255,0.02)",
-    padding: "8px 10px",
-    marginTop: 6,
-    overflowWrap: "anywhere",
-};
-
-const debugLineStyle = {
-    borderTop: "1px solid rgba(0,255,65,0.12)",
-    paddingTop: 6,
-    marginTop: 6,
-    opacity: 0.82,
-    overflowWrap: "anywhere",
-};
-
-function secondaryButtonStyle(theme) {
-    return {
-        backgroundColor: "rgba(255,255,255,0.04)",
-        color: theme.primary,
-        border: `1px solid rgba(0,255,65,0.45)`,
-        padding: "7px 11px",
-        cursor: "pointer",
-    };
-}
-
-function smallButtonStyle(theme) {
-    return {
-        ...secondaryButtonStyle(theme),
-        padding: "4px 8px",
-        fontSize: 11,
-    };
-}
-
-function dangerButtonStyle(theme) {
-    return {
-        backgroundColor: "rgba(255,77,77,0.12)",
-        color: theme.error,
-        border: `1px solid ${theme.error}`,
-        padding: "7px 11px",
-        cursor: "pointer",
-    };
-}
-
-function modeButtonStyle(theme, isCurrent, isSelected) {
-    return {
-        backgroundColor: isCurrent
-            ? "rgba(0,255,65,0.14)"
-            : isSelected
-                ? "rgba(255,255,255,0.07)"
-                : "rgba(255,255,255,0.03)",
-        color: isCurrent ? theme.primary : theme.primary,
-        border: `1px solid ${isCurrent ? theme.primary : "rgba(0,255,65,0.35)"}`,
-        padding: "10px 12px",
-        textAlign: "left",
-        cursor: "pointer",
-    };
-}
-
-function renderBadge(theme, text, tone) {
-    const palette = tone === "active"
-        ? { color: theme.primary, background: "rgba(0,255,65,0.14)", border: theme.primary }
-        : tone === "off"
-            ? { color: theme.error, background: "rgba(255,77,77,0.12)", border: theme.error }
-            : { color: theme.primary, background: "rgba(255,255,255,0.04)", border: "rgba(0,255,65,0.35)" };
-
-    return (
-        <span
-            style={{
-                display: "inline-block",
-                padding: "4px 10px",
-                minWidth: 74,
-                textAlign: "center",
-                borderRadius: 999,
-                border: `1px solid ${palette.border}`,
-                backgroundColor: palette.background,
-                color: palette.color,
-            }}
-        >
-            {text}
-        </span>
-    );
 }
