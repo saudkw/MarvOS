@@ -197,13 +197,23 @@ export async function main(ns) {
             await ns.sleep(500);
         }
 
-        batchInfo = getBatchInfo(
-            ns,
-            currentTarget,
-            Math.max(1, dispatch.batchesRun || 1),
-            plan.totalThreads,
-            1,
-        );
+        if (dispatch.recalc || dispatch.batchesRun <= 1) {
+            batchInfo = getBatchInfo(
+                ns,
+                currentTarget,
+                Math.max(1, dispatch.batchesRun || 1),
+                plan.totalThreads,
+                Math.max(1, tunedBatchInfo.H1 || 1),
+            );
+        } else {
+            batchInfo = getBatchInfo(
+                ns,
+                currentTarget,
+                -1,
+                -1,
+                Math.max(1, tunedBatchInfo.H1 - 1),
+            );
+        }
         lastHackThreads = Math.max(1, batchInfo.H1 || 1);
     }
 }
