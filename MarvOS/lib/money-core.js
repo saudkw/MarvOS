@@ -205,9 +205,10 @@ export function getBatchInfo(ns, hostname, maxBatches = -1, availableThreads = -
     }
 
     const maxHackThreads = Math.max(1, Math.ceil(1 / hackPercent));
-    const start = Math.min(maxHackThreads, Math.max(1, startHackThreads));
-    const searchWindow = availableThreads > 0
-        ? Math.max(24, Math.min(256, Math.floor(Math.sqrt(Math.max(1, availableThreads))) * 4))
+    const constrainedSearch = availableThreads > 0;
+    const start = constrainedSearch ? 1 : Math.min(maxHackThreads, Math.max(1, startHackThreads));
+    const searchWindow = constrainedSearch
+        ? maxHackThreads
         : 16;
     const end = Math.min(maxHackThreads, start + searchWindow);
 

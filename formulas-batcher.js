@@ -123,7 +123,7 @@ export async function main(ns) {
         const live = getLiveTargetStats(ns, currentTarget);
 
         if (!batchInfo || batchInfo.H1 <= 0) {
-            batchInfo = getBatchInfo(ns, currentTarget, -1, -1, lastHackThreads);
+            batchInfo = getBatchInfo(ns, currentTarget, Math.max(1, totalThreads), totalThreads, 1);
             lastHackThreads = Math.max(1, batchInfo.H1 || 1);
         }
 
@@ -161,7 +161,7 @@ export async function main(ns) {
         }, () => lastStatusAt, (value) => { lastStatusAt = value; });
 
         if (!finalPid) {
-            batchInfo = getBatchInfo(ns, currentTarget, -1, -1, Math.max(1, tunedBatchInfo.H1 || 1));
+            batchInfo = getBatchInfo(ns, currentTarget, Math.max(1, totalThreads), totalThreads, 1);
             lastHackThreads = Math.max(1, batchInfo.H1 || 1);
             await ns.sleep(750);
             continue;
@@ -193,11 +193,13 @@ export async function main(ns) {
             await ns.sleep(500);
         }
 
-        if (dispatch.recalc || dispatch.batchesRun <= 1) {
-            batchInfo = getBatchInfo(ns, currentTarget, dispatch.batchesRun, plan.totalThreads, Math.max(1, tunedBatchInfo.H1 || 1));
-        } else {
-            batchInfo = getBatchInfo(ns, currentTarget, -1, -1, Math.max(1, tunedBatchInfo.H1 - 1));
-        }
+        batchInfo = getBatchInfo(
+            ns,
+            currentTarget,
+            Math.max(1, dispatch.batchesRun || 1),
+            plan.totalThreads,
+            1,
+        );
         lastHackThreads = Math.max(1, batchInfo.H1 || 1);
     }
 }
