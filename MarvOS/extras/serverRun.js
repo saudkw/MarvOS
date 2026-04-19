@@ -113,8 +113,7 @@ function dispatchWork(ns, workers, script, target, delay, threads, requireChunk,
     let remaining = Math.max(0, Math.floor(threads));
     let lastPid = 0;
     let chunking = requireChunk;
-    const workerGroups = getDispatchGroups(workers, tag);
-    const orderedWorkers = workerGroups.flat();
+    const orderedWorkers = rotateWorkers(workers, tag);
 
     if (remaining <= 0) return { lastPid: 0, chunking };
 
@@ -131,25 +130,22 @@ function dispatchWork(ns, workers, script, target, delay, threads, requireChunk,
         chunking = false;
     }
 
-    if (remaining > 1) {
-        for (const group of workerGroups) {
-            const eligibleWorkers = group.filter((worker) => Math.floor(worker.freeRam / scriptRam) > 0);
-            if (eligibleWorkers.length <= 1 || remaining <= 0) continue;
-            const share = Math.max(1, Math.ceil(remaining / eligibleWorkers.length));
-            for (const worker of eligibleWorkers) {
-                const availableThreads = Math.floor(worker.freeRam / scriptRam);
-                if (availableThreads <= 0 || remaining <= 0) continue;
-                const runThreads = Math.min(remaining, availableThreads, share);
-                if (runThreads <= 0) continue;
-                const pid = ns.exec(script, worker.host, runThreads, target, Math.max(0, delay), `${tag}:spread:${runThreads}`);
-                if (pid === 0) {
-                    if (logging) ns.tprint(`Dispatch failed: ${script} on ${worker.host} t=${runThreads} target=${target}`);
-                    continue;
-                }
-                worker.freeRam -= runThreads * scriptRam;
-                remaining -= runThreads;
-                lastPid = pid;
+    const eligibleWorkers = orderedWorkers.filter((worker) => Math.floor(worker.freeRam / scriptRam) > 0);
+    if (eligibleWorkers.length > 1 && remaining > 1) {
+        const share = Math.max(1, Math.ceil(remaining / eligibleWorkers.length));
+        for (const worker of eligibleWorkers) {
+            const availableThreads = Math.floor(worker.freeRam / scriptRam);
+            if (availableThreads <= 0 || remaining <= 0) continue;
+            const runThreads = Math.min(remaining, availableThreads, share);
+            if (runThreads <= 0) continue;
+            const pid = ns.exec(script, worker.host, runThreads, target, Math.max(0, delay), `${tag}:spread:${runThreads}`);
+            if (pid === 0) {
+                if (logging) ns.tprint(`Dispatch failed: ${script} on ${worker.host} t=${runThreads} target=${target}`);
+                continue;
             }
+            worker.freeRam -= runThreads * scriptRam;
+            remaining -= runThreads;
+            lastPid = pid;
         }
     }
 
@@ -182,13 +178,6 @@ function dispatchWork(ns, workers, script, target, delay, threads, requireChunk,
 
 function getTotalThreads(workers) {
     return workers.reduce((sum, worker) => sum + Math.max(0, Math.floor(worker.freeRam / 1.75)), 0);
-}
-
-function getDispatchGroups(workers, tag) {
-    const purchased = rotateWorkers(workers.filter((worker) => worker.type === "purchased"), `${tag}:p`);
-    const rooted = rotateWorkers(workers.filter((worker) => worker.type === "rooted"), `${tag}:r`);
-    const home = rotateWorkers(workers.filter((worker) => worker.type === "home"), `${tag}:h`);
-    return [purchased, rooted, home];
 }
 
 function rotateWorkers(workers, seed) {
